@@ -13,6 +13,9 @@ This applet is primarly used to run our exome pre-processing workflow
 
 - see [the main script](../dx-applets/analysis_scripts/run.sh).
 
+Note: the binaries required were not committed, the original binaries can be found by using `dx get app-cloud_workstation`.
+In addition an up-to-date copy of `dxda` and `dxfuse` are recommended.
+
 To run the workflow:
 
 - start and SSH into the workstation
