@@ -13,7 +13,7 @@ f.call <- function(f, args.list, envir = parent.frame(), force.incl = c()) {
   do.call(f, args.list, envir = envir)
 }
 
-mle.root <- function(f, f.params, start, maxiter=50) {
+mle.root <- function(f, f.params, start, maxiter=1000) {
   root.params <- list(
     f = f,
     start = start,
@@ -40,7 +40,8 @@ mle.optim <- function(f, d, f.params, start, maxit=100) {
     par = start,
     fn = f,
     # gr = d,
-    method = "SANN",
+    # method = "BFGS",
+    # method = "SANN",
     control = list(
       maxit = maxit,
       fnscale = -1
@@ -50,12 +51,12 @@ mle.optim <- function(f, d, f.params, start, maxit=100) {
   f.call(optim, c(f.params, optim.params), force.incl = names(f.params))
 }
 
-mle <- function(lrt.data, params, maxiter = 50, cases.only = T) {
+mle <- function(lrt.data, params, maxiter = 250, cases.only = T) {
   # add data to estimated model parameters
   f.params <- modifyList(params, lrt.data)
   # extract only those parameters needed for the optimizer
   # note: this ensures parameters to be estimated are actually estimated by multiroot
-  f.params <- extract.args.for.function(D, f.params)
+  f.params <- extract.args.for.function(L, f.params)
   f.params <- modifyList(f.params, list(cases.only = cases.only))
   
   start <- c(
@@ -100,7 +101,7 @@ run.lrt <- function(lrt.data, params, cases.only=T) {
       iter = NA,
       gamma = NA,
       eta = NA,
-      ll.result = NULL,
+      ll = NULL,
       p.val = 1
     ))
   }
@@ -115,9 +116,9 @@ run.lrt <- function(lrt.data, params, cases.only=T) {
   )
   ll.params$cases.only <- cases.only
   
-  ll.result <- f.call(LL, ll.params)
-  chi2 <- 2 * ll.result
+  ll <- f.call(LL, ll.params)
+  chi2 <- 2 * ll
   p.val <- pchisq(chi2, df = 2, lower.tail = F)
   
-  modifyList(root.result, list(ll.result = ll.result, p.val = p.val))
+  modifyList(root.result, list(ll = ll, p.val = p.val))
 }

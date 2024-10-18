@@ -1,5 +1,4 @@
 library(dplyr, quietly = T, warn.conflicts = F)
-library(pgenlibr, quietly = T, warn.conflicts = F)
 
 default.na <- function(err) NA
 

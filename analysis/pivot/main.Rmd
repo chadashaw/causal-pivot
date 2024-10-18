@@ -1,5 +1,5 @@
 ---
-title: "Primary Collider Analysis"
+title: "Causal Pivot Analysis"
 author: "CJ Williams"
 date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
 
@@ -412,7 +412,7 @@ saveRDS(marker.prs.cors, MARKER_PRS_CORS_RDS)
 
 # flag markers with significant association w/ corresponding PRS ####
 
-prs.sig.marker.ids <- concat.df.list(marker.prs.cors, keycol = 'cohort') %>%
+prs.sig.marker.ids <- concat.df.list(marker.prs.cors, key.cols = 'cohort') %>%
   mutate(p.val = as.numeric(format(p.val, scientific = F))) %>%
   filter(p.val < 0.05) %>%
   pull(marker.id) %>%
@@ -534,7 +534,7 @@ prs.cohort.summary.df <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name
       inner_join(freq.df, by = 'case')
   }) %>%
       do.call(bind_rows, .)
-}) %>% concat.df.list(keycol = 'cohort.name') %>%
+}) %>% concat.df.list(key.cols = 'cohort.name') %>%
   mutate(case = ifelse(case, 'case', 'control')) %>%
   pivot_wider(id_cols = c('cohort.name', 'marker.id'), names_from = 'case', values_from = c('prs.mean', 'f', 'n')) %>%
   select(
@@ -621,6 +621,8 @@ mt.palette <- paletteer_d(
     labs(fill = 'Sequence Ontology')
 ) %>%
   save.plot('mutation_type.waffle', w = 7.35, h = 4.5 / 1.5, root.dir = PLOTS_DIR, sub.dir = 'supplementary')
+
+saveRDS(mt.df, file.path(OUT_DIR, 'rv.mutation.type.rds'))
 ```
 
 ### Variant spread hisogram
@@ -646,7 +648,8 @@ alt.counts <- alt.sums.by.sample(rv.mtx, cohort.marks) %>%
   mutate(mutation.type = as.factor(snakecase::to_title_case(mutation.type))) %>%
   rowwise() %>%
   filter(gene %in% COHORTS[[cohort]]$genes) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(cohort = factor(cohort, levels = names(cohort.dfs)))
 
 # calculate maximum number of count groups per cohort - used to place label
 max.n <- alt.counts %>%
@@ -665,7 +668,7 @@ max.counts <- alt.counts %>%
   ungroup()
 
 # generate actual plot and save
-(
+mt.dist <- (
   alt.counts %>%
   mutate(n.samples = factor(ifelse(alt.count > 5, ">5", as.character(alt.count)), levels = c("1", "2", "3", "4", "5", ">5"))) %>%
   group_by(cohort, mutation.type, n.samples) %>%
@@ -674,16 +677,19 @@ max.counts <- alt.counts %>%
   geom_col(color = "black", aes(fill = mutation.type)) +
   scale_fill_manual(values = mt.palette) +
   facet_wrap(~cohort, scales='free_y') +
+  theme_bw() +
   labs(
     x = 'Sample Counts',
     y = 'Num Markers',
-    title = paste("Variant Distribution Histogram w/ Sequence Ontology"),
+    # title = paste("Variant Distribution Histogram w/ Sequence Ontology"),
+    title = '',
     fill = "Mutation Type"
   ) +
-  geom_text(data = max.counts, aes(label = label, y = max.n), x = 5)
+  geom_text(data = max.counts, aes(label = label, y = max.n), x = 4)
 ) %>%
   save.plot('mutation_type.distribution', root.dir = PLOTS_DIR, sub.dir = 'supplementary')
-  
+
+mt.dist
 # save results ####
 
 # create useful rv count summary
@@ -718,7 +724,7 @@ The equations for the Logit G model are given in
 [equations.logitG.R](../lrt_equations/equations.logitG.R).
 
 
-```{r lrt_logitG_3_cohorts}
+```{r lrt_logitG_3_cohorts, cache=T}
 # source MLE functions and load into local environment ####
 source('../lrt_equations/equations.logitG.R')
 list2env(lrt.logitG.equations, envir = environment())
@@ -726,10 +732,10 @@ source('utils/lrt.R')
 
 # perform MLE testing under all cohorts ####
 
-n.mle.perms <- 1000 # number of permutations
+n.mle.perms <- 1024 # number of permutations
 
-lrt.logitG.results <- purrr::map(cohort.dfs, function(cohort.df) {
-  x.results <- purrr::map(cohort.gene.grps, function(gene.grp) {
+logitG.lrt.run <- purrr::map(cohort.dfs, function(cohort.df) {
+  purrr::map(cohort.gene.grps, function(gene.grp) {
     # massage data
     G.df <- rv.prs.df[c('sample.id', gene.grp)] %>%
       magrittr::set_colnames(c('sample.id', 'G'))
@@ -741,6 +747,9 @@ lrt.logitG.results <- purrr::map(cohort.dfs, function(cohort.df) {
         X = prs
       ) %>%
       select(Y, X, G)
+  
+    # calculate forward model paramter "targets"
+    lrt.target.model <- broom::tidy(glm(Y ~ G * X, family = binomial(link = 'logit'), data = lrt.df))
     
     # estimate model parameters (alpha, beta, omega)
     lrt.est.model <- broom::tidy(glm(Y ~ X, family = binomial(link = 'logit'), data = lrt.df))
@@ -750,132 +759,170 @@ lrt.logitG.results <- purrr::map(cohort.dfs, function(cohort.df) {
       beta = lrt.est.model$estimate[2],
       gamma = 0,
       eta = 0,
-      omega = mean(lrt.df$G)
+      omega = mean(lrt.df$G) # rare variant frequency in disease
     )
 
-    # calculate 100 MLE under observed data and take median results
-    a <- lapply(seq(100), function(i) {
+    # calculate MLE w/ some jitter (internal to run.lrt) to avoid extreme results
+    a <- lapply(seq(16), function(i) {
       unlist(run.lrt(as.list(lrt.df), params, cases.only=T))
     }) %>% bind_rows()
     
-    mle.result <- list(
+    mle.run <- list(
       gamma = median(a$gamma),
       eta = median(a$eta),
-      ll = median(a$ll.result),
+      ll = median(a$ll),
       p.val = median(a$p.val)
     )
-
+    
+    fisher.information <- f.call(
+      fisher.info,
+      params %>%
+        modifyList(mle.run) %>%
+        modifyList(lrt.df)
+    )
+    
     # calculate permutation distribution of MLE results under G
     perm.result <- lapply(seq(n.mle.perms), function(i) {
-      r <- run.lrt(as.list(mutate(lrt.df, G = sample(G))), params, cases.only=T)
-      list(gamma = r$gamma, eta = r$eta, ll = r$ll.result, p.val = r$p.val)
+      run.lrt(as.list(mutate(lrt.df, G = sample(G))), params, cases.only=T)
     }) %>%
       do.call(bind_rows, .) %>%
-      as.data.frame() %>%
-      mutate(gene.grp = gene.grp)
+      as.data.frame()
 
     list(
-      params = modifyList(list(gene.grp = gene.grp), params),
-      mle.result = list(
-        gene.grp = gene.grp,
-        gamma = mle.result$gamma,
-        eta = mle.result$eta,
-        ll = mle.result$ll,
-        p.val = mle.result$p.val
-      ),
+      params = params,
+      mle.target = lrt.target.model,
+      mle.run = mle.run,
+      fisher.information = fisher.information,
       perm.result = perm.result
     )
-  })
-  
-  # bind results into data frames
-  params <- do.call(bind_rows, lapply(x.results, `[[`, "params"))
-  mle.result <- do.call(bind_rows, lapply(x.results, `[[`, "mle.result"))
-  perm.result <- do.call(bind_rows, lapply(x.results, `[[`, "perm.result"))
-  
-  list(
-    params = params,
-    mle.result = mle.result,
-    perm.result = perm.result
-  )
+  }) %>%
+    purrr::set_names(cohort.gene.grps)
 })
 
-# concat cohort results into single data frame ####
-params.logitG <- concat.df.list(purrr::map(lrt.logitG.results, `[[`, "params"), keycol = 'cohort.name')
-mle.logitG.result <- concat.df.list(purrr::map(lrt.logitG.results, `[[`, "mle.result"), keycol = 'cohort.name')
-mle.perm.logitG.result <- concat.df.list(purrr::map(lrt.logitG.results, `[[`, "perm.result"), keycol = 'cohort.name')
+logitG.lrt.run <- logitG.lrt.run.bak
+for (cohort.name in names(logitG.lrt.run)) {
+  for (gene.grp in cohort.gene.grps) {
+    logitG.lrt.run[[cohort.name]][[gene.grp]]$mle.run <- logitG.lrt.run[[cohort.name]][[gene.grp]]$mle.result
+    logitG.lrt.run[[cohort.name]][[gene.grp]]$mle.result <- NULL
+  }
+}
 
-# set factor levels so plots appear in correct order
-mle.logitG.result$cohort.name <- factor(mle.logitG.result$cohort.name, levels = names(COHORTS))
-mle.logitG.result$gene.grp <- factor(mle.logitG.result$gene.grp, levels = cohort.gene.grps)
-mle.perm.logitG.result$cohort.name <- factor(mle.perm.logitG.result$cohort.name, levels = names(COHORTS))
-mle.perm.logitG.result$gene.grp <- factor(mle.perm.logitG.result$gene.grp, levels = cohort.gene.grps)
+# c('params', 'mle.target', 'mle.run', 'perm.result') %>%
+c('params', 'mle.run', 'perm.result') %>%
+# c('mle.target') %>%
+  purrr::set_names(paste('logitG', ., sep = '.')) %>%
+  purrr::map(function(leaf.key) {
+    concat.df.list(extract.leaf(logitG.lrt.run, leaf.key), key.cols = c('cohort.name', 'gene.grp')) %>%
+      mutate(
+        cohort.name = factor(cohort.name, levels = names(COHORTS)),
+        gene.grp = factor(gene.grp, levels = cohort.gene.grps)
+      )
+  }) %>%
+  list2env(mle.objs, envir = .GlobalEnv)
+
+logitG.fisher.information <- extract.leaf(logitG.lrt.run, 'fisher.information')  
+
+# sometimes the optimization produces unrealistic gamma/eta estimates
+logitG.perm.result <- logitG.perm.result %>%
+  group_by(cohort.name, gene.grp) %>%
+  filter(
+    eta > quantile(eta, 0.25) - 2 * IQR(eta),
+    eta < quantile(eta, 0.75) + 2 * IQR(eta),
+    gamma > quantile(gamma, 0.25) - 2 * IQR(gamma),
+    gamma < quantile(gamma, 0.75) + 2 * IQR(gamma),
+  ) %>%
+  ungroup()
+
+# calculate proportion of fisher information in cases
+logitG.conf.int <- logitG.fisher.information %>%
+  purrr::imap(function(a, cohort.name) {
+    a %>%
+      purrr::imap(function(b, gene.grp) {
+        x <- solve(b$I1 * b$n1 + b$I2 * b$n2)
+        y <- logitG.mle.run[
+          logitG.mle.run$cohort.name == cohort.name &
+            logitG.mle.run$gene.grp == gene.grp,]
+        data.frame(
+          gamma.low = y$gamma + qnorm(0.025, sd = sqrt(x[1,1])),
+          gamma = y$gamma,
+          gamma.high = y$gamma + qnorm(1 - 0.025, sd = sqrt(x[1,1])),
+          eta.low = y$eta + qnorm(0.025, sd = sqrt(x[2,2])),
+          eta = y$eta,
+          eta.high = y$eta + qnorm(1 - 0.025, sd = sqrt(x[2,2]))
+        )
+      })
+  }) %>%
+  concat.df.list(key.cols = c('cohort.name', 'gene.grp'))
 
 # calculate the 95th quantile of the LL permutation distribution ####
-mle.perm.logitG.q.95 <- mle.perm.logitG.result %>%
+logitG.perm.q95 <- logitG.perm.result %>%
   group_by(cohort.name, gene.grp) %>%
   summarize(ll = q.95 <- quantile(ll, 0.95))
 
 # calculate p.values for the cohorts based on 95th quantile of LL permutations
-mle.logitG.p.vals <- inner_join(mle.logitG.result, mle.perm.logitG.result, by = c('cohort.name', 'gene.grp'), suffix = c('.mle', '.perm')) %>%
+logitG.mle.p.vals <- inner_join(logitG.mle.run, logitG.perm.result, by = c('cohort.name', 'gene.grp'), suffix = c('.mle', '.perm')) %>%
   group_by(cohort.name, gene.grp) %>%
   summarize(p.val = mean(ll.perm > ll.mle))
 
-params.logitG
-mle.logitG.p.vals
-
 (
-  mle.perm.logitG.result %>%
+  logitG.perm.result %>%
   ggplot(aes(x = ll)) +
   facet_grid(cols = vars(cohort.name), rows = vars(gene.grp), scales = 'free') +
   geom_histogram(bins = 14) +
-  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', color = '#f42e3d', data = mle.logitG.result) +
-  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', data = mle.perm.logitG.q.95) +
+  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', color = '#f42e3d', data = logitG.mle.run) +
+  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', data = logitG.perm.q95) +
   labs(
     y = 'Count',
     x = 'Log Likelihood',
   )
 ) %>%
-  save.plot('logitG.MLE.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation')
+  save.plot('logitG.MLE.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 
 (
   mle.perm.logitG.contour.plt <- lapply(names(COHORTS), function(my.cohort.name) {
   c(
-    list(grid::textGrob(my.cohort.name)),
     lapply(gene.grps, function(my.gene.grp) {
-      mle.perm <- mle.perm.logitG.result %>%
+      mle.perm <- logitG.perm.result %>%
         filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name)
-      mle.observed <- mle.logitG.result %>%
+      mle.observed <- logitG.mle.run %>%
         filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name)
+      mle.target <- logitG.mle.target %>%
+        filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name) %>%
+        filter(term %in% c('G', 'G:X')) %>%
+        select(term, estimate) %>%
+        pivot_wider(names_from = 'term', values_from = 'estimate') %>%
+        select(gamma = G, eta = `G:X`)
       mle.perm %>%
         ggplot(aes(x = gamma, y = eta)) +
-        geom_density_2d_filled(alpha = 0.4, bins = 7) +
-        geom_density_2d(color = "black", bins = 7) +
+        geom_density_2d_filled(alpha = 1/3, bins = 7) +
+        geom_density_2d(color = "black", alpha = 0.7, bins = 7) +
         # geom_point(shape = 1, size = 1/3, alpha = 1/3) +
-        geom_point(color = "#f42e3d", size = 4, data = mle.observed) +
-        geom_point(color = "black", size = 1, data = mle.observed) +
+        # geom_point(color = "black", size = 1, data = mle.observed) +
         geom_vline(xintercept = 0, linewidth = 0.5, linetype = 'dotted') +
         geom_hline(yintercept = 0, linewidth = 0.5, linetype = 'dotted') +
+        geom_point(x = mle.target$gamma, y = mle.target$eta,
+          color = "black", size = 4, shape = 4, stroke = 1) +
+        geom_point(color = "#f42e3d", size = 3, shape = 16, data = mle.observed) +
         scale_fill_brewer(palette = 'PuBu') +
         labs(
           x = expression(gamma),
           y = expression(eta),
         ) +
         theme(legend.position = 'none')
-    })
+    }),
+    list(grid::textGrob(my.cohort.name, rot = -90))
   )
 }) %>% 
   unlist(recursive = FALSE) %>%
   {
-    c(.,
-      c(
-        list(plot_spacer()),
-        map(gene.grps, ~grid::textGrob(.x, rot = -90))
-      )
+    c(map(gene.grps, ~grid::textGrob(.x)),
+      list(plot_spacer()),
+      .
     )
   } %>%
   wrap_plots(
     ncol = 4,
-    byrow = F,
+    byrow = T,
     heights = c(1, 5, 5, 5),
     widths = c(5, 5, 5, 1)
   ) +
@@ -883,12 +930,19 @@ mle.logitG.p.vals
     axis_titles = 'collect'
   )
 ) %>%
-  save.plot('logitG.MLE.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation')
+  save.plot('logitG.MLE.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 
 # save results ####
+logitG.lrt.result <- list(
+  params = logitG.params,
+  mle.result = logitG.mle.run,
+  mle.p.vals = logitG.mle.p.vals,
+  perm.result = logitG.perm.result,
+  fisher.information = logitG.fisher.information,
+  logitG.conf.int = logitG.conf.int
+)
 
-saveRDS(params.logitG, file = file.path(OUT_DIR, 'params.logitG'))
-saveRDS(mle.logitG.p.vals, file = file.path(OUT_DIR, 'mle.logitG.p.vals'))
+saveRDS(logitG.lrt.result, file.path(OUT_DIR, 'logitG.mle.result.rds'))
 ```
 
 ## Liability G
@@ -899,7 +953,10 @@ The equations for the Logit G model are given in
 Note: the variability for the MLE under the liability model is small, so we can
 just run MLE once.
 
-```{r lrt_liabilityG_HC190}
+```{r lrt_liabilityG_HC190, cache=T}
+# this can be computationally intensive, so for the sake of reasonable knitting
+# times, we cache the result
+
 # source MLE functions and load into local environment ####
 source('../lrt_equations/equations.liabilityG.R')
 list2env(lrt.liabilityG.equations, envir = environment())
@@ -907,12 +964,12 @@ source('utils/lrt.R')
 
 # perform MLE testing for HC190 ####
 
-n.mle.perms <- 1000
+n.mle.perms <- 2
 
 hc.cohort.df <- cohort.dfs$HC190 %>%
   left_join(select(cohort.meta, sample.id, ldl = ldl.inst.0), by = 'sample.id')
 
-lrt.liabilityG.results <- purrr::map(unname(cohort.gene.grps), function(gene.grp) {
+liabilityG.lrt.run <- purrr::map(unname(cohort.gene.grps), function(gene.grp) {
   # massage data
   G.df <- rv.prs.df[c('sample.id', gene.grp)]
   colnames(G.df) <- c('sample.id', 'G')
@@ -925,6 +982,9 @@ lrt.liabilityG.results <- purrr::map(unname(cohort.gene.grps), function(gene.grp
     ) %>%
     select(y, X, G)
   
+  # calculate forward model paramter "targets"
+  lrt.target.model <- broom::tidy(lm(y ~ G * X, data = lrt.df))
+
   # estimate model parameters (alpha, beta, delta, sige, omege)
   lrt.est.model <- lm(y ~ X, data = lrt.df)
   
@@ -937,62 +997,60 @@ lrt.liabilityG.results <- purrr::map(unname(cohort.gene.grps), function(gene.grp
     sige = sqrt(mean(lrt.est.model$residuals^2)),
     omega = mean(lrt.df$G)
   )
-
+  
   # calculate MLE result
-  mle.result <- run.lrt(as.list(lrt.df), params, cases.only=T)
+  mle.run <- run.lrt(as.list(lrt.df), params, cases.only=T)
 
   # calculate permutation distribution of MLE results under G
   perm.result <- lapply(seq(n.mle.perms), function(i) {
     r <- run.lrt(as.list(mutate(lrt.df, G = sample(G))), params, cases.only=T)
-    list(gamma = r$gamma, eta = r$eta, ll = r$ll.result, p.val = r$p.val)
   }) %>%
     do.call(bind_rows, .) %>%
-    as.data.frame() %>%
-    mutate(gene.grp = gene.grp)
+    as.data.frame()
 
   list(
-    params = modifyList(list(gene.grp = gene.grp), params),
-    mle.result = list(
-      gene.grp = gene.grp,
-      gamma = mle.result$gamma,
-      eta = mle.result$eta,
-      ll = mle.result$ll.result,
-      p.val = mle.result$p.val
-    ),
+    params = params,
+    mle.target = lrt.target.model,
+    mle.run = mle.run,
     perm.result = perm.result
   )
 }) %>%
   purrr::set_names(cohort.gene.grps)
 
-# concat cohort results into single data frame ####
-params.liabilityG <- do.call(bind_rows, lapply(lrt.liabilityG.results, `[[`, "params"))
-mle.liabilityG.result <- do.call(bind_rows, lapply(lrt.liabilityG.results, `[[`, "mle.result"))
-mle.perm.liabilityG.result <- do.call(bind_rows, lapply(lrt.liabilityG.results, `[[`, "perm.result"))
+for (gene.grp in cohort.gene.grps) {
+  liabilityG.lrt.run[[gene.grp]]$mle.run <- liabilityG.lrt.run[[gene.grp]]$mle.result
+  liabilityG.lrt.run[[gene.grp]]$mle.result <- NULL
+}
 
-# set factor levels so plots appear in correct order
-mle.liabilityG.result$gene.grp <- factor(mle.liabilityG.result$gene.grp, levels = cohort.gene.grps)
-mle.perm.liabilityG.result$gene.grp <- factor(mle.perm.liabilityG.result$gene.grp, levels = cohort.gene.grps)
+# c('params', 'mle.target', 'mle.run', 'perm.result') %>%
+c('params', 'mle.run', 'perm.result') %>%
+# c('mle.target') %>%
+  purrr::set_names(paste('liabilityG', ., sep = '.')) %>%
+  purrr::map(function(leaf.key) {
+    concat.df.list(extract.leaf(liabilityG.lrt.run, leaf.key), key.cols = c('gene.grp')) %>%
+      mutate(gene.grp = factor(gene.grp, levels = cohort.gene.grps))
+  }) %>%
+  list2env(mle.objs, envir = .GlobalEnv)
+
+# liabilityG.fisher.information <- extract.leaf(liabilityG.lrt.run, 'fisher.information')  
 
 # calculate the 95th quantile of the LL permutation distribution ####
-mle.perm.liabilityG.q.95 <- mle.perm.liabilityG.result %>%
+liabilityG.perm.q95 <- liabilityG.perm.result %>%
   group_by(gene.grp) %>%
   summarize(ll = q.95 <- quantile(ll, 0.95, na.rm = T))
 
 # calculate p.values for the cohorts based on 95th quantile of LL permutations
-mle.liabilityG.p.vals <- inner_join(mle.liabilityG.result, mle.perm.liabilityG.result, by = 'gene.grp', suffix = c('.mle', '.perm')) %>%
+liabilityG.mle.p.vals <- inner_join(liabilityG.mle.run, liabilityG.perm.result, by = 'gene.grp', suffix = c('.mle', '.perm')) %>%
   group_by(gene.grp) %>%
   summarize(p.val = mean(ll.perm > ll.mle))
 
-params.liabilityG
-mle.liabilityG.p.vals
-
 (
-  mle.perm.liabilityG.result %>%
+  liabilityG.perm.result %>%
   ggplot(aes(x = ll)) +
   facet_wrap(~gene.grp, scales = 'free') +
   geom_histogram(bins = 14) +
-  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', color = '#f42e3d', data = mle.liabilityG.result) +
-  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', data = mle.perm.liabilityG.q.95) +
+  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', color = '#f42e3d', data = liabilityG.mle.run) +
+  geom_vline(aes(xintercept = ll), linewidth = 1, linetype = 'dashed', data = liabilityG.perm.q95) +
   labs(
     y = 'Count',
     x = 'Log Likelihood',
@@ -1002,21 +1060,29 @@ mle.liabilityG.p.vals
 
 (
   lapply(gene.grps, function(my.gene.grp) {
-  mle.perm <- mle.perm.liabilityG.result %>%
+  mle.perm <- liabilityG.perm.result %>%
     filter(gene.grp == my.gene.grp)
-  mle.observed <- mle.liabilityG.result %>%
+  mle.observed <- liabilityG.mle.run %>%
     filter(gene.grp == my.gene.grp)
-  
+  mle.target <- liabilityG.mle.target %>%
+    filter(gene.grp == my.gene.grp) %>%
+    filter(term %in% c('G', 'G:X')) %>%
+    select(term, estimate) %>%
+    pivot_wider(names_from = 'term', values_from = 'estimate') %>%
+    select(gamma = G, eta = `G:X`)
   mle.perm %>%
     ggplot(aes(x = gamma, y = eta)) +
     geom_density_2d_filled(alpha = 0.4, bins = 7) +
     geom_density_2d(color = "black", bins = 7) +
     # geom_point(shape = 1, size = 1/3, alpha = 1/3) +
-    geom_point(color = "#f42e3d", size = 4, data = mle.observed) +
-    geom_point(color = "black", size = 1, data = mle.observed) +
     geom_vline(xintercept = 0, linewidth = 0.5, linetype = 'dotted') +
     geom_hline(yintercept = 0, linewidth = 0.5, linetype = 'dotted') +
+    geom_point(x = mle.target$gamma, y = mle.target$eta,
+      color = "black", size = 4, shape = 4, stroke = 1) +
+    geom_point(color = "#f42e3d", size = 3, shape = 16, data = mle.observed) +
     scale_fill_brewer(palette = 'PuBu') +
+    scale_x_continuous(limits = c(-1.5, 2)) +
+    scale_y_continuous(limits = c(-1, 1)) +
     labs(
       x = expression(gamma),
       y = expression(eta),
@@ -1036,12 +1102,18 @@ mle.liabilityG.p.vals
     )
 ) %>%
   save.plot('liabilityG.MLE.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 7.35 * 2 / 16 * 6, h = 4.5 * 2)
-
   
 # save results ####
+liabilityG.lrt.result <- list(
+  params = liabilityG.params,
+  mle.run = liabilityG.mle.run,
+  mle.p.vals = liabilityG.mle.p.vals,
+  perm.result = liabilityG.perm.result
+  # fisher.information = liabilityG.fisher.information,
+  # liabilityG.conf.int = liabilityG.conf.int
+)
 
-saveRDS(params.liabilityG, file = file.path(OUT_DIR, 'params.liabilityG'))
-saveRDS(mle.liabilityG.p.vals, file = file.path(OUT_DIR, 'mle.liabilityG.p.vals'))
+saveRDS(liabilityG.lrt.result, file.path(OUT_DIR, 'liabilityG.lrt.result.RDS'))
 ```
 
 # Plot Collider Effect
@@ -1054,26 +1126,15 @@ disease - a fundamental assumption in our models.
 ```{r plot_collider_scatter, eval = F}
 # massage cohort.dfs into a single dataframe containing correctly paired RV/PRS ####
 
-cc.prs.df <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
-  cohort.df %>%
-    mutate(
-      lbl = paste0(
-        c(cohort.prs.names[[cohort.name]],
-          cohort.gene.grps[[cohort.name]]),
-        collapse = '/'
-      )
-    ) %>%
-    select(sample.id, rv, lbl, value = prs)
-}) %>%
-  do.call(bind_rows, .)
+cc.prs.df <- concat.df.list(cohort.dfs, key.cols = 'cohort.name')
 
 # get summary stats for plotting ####
 
 cc.prs.stats.df <- cc.prs.df %>%
-  group_by(lbl, rv) %>%
+  group_by(cohort.name, rv) %>%
   summarize(
-    mean.prs = mean(value),
-    err.prs = sqrt(var(value)/n())
+    mean.prs = mean(prs),
+    err.prs = sqrt(var(prs)/n())
   ) %>%
   ungroup()
 
@@ -1088,25 +1149,27 @@ calc.p.val <- function(formula, data) {
   )[[12]][2,4]
 }
 
-cc.prs.pvals.df <- split(cc.prs.df, ~lbl) %>%
+cc.prs.pvals.df <- split(cc.prs.df, ~cohort.name) %>%
   map(function(prs.df) {
-      tryCatch(calc.p.val(rv ~ value, prs.df), error = default.na)
+      tryCatch(calc.p.val(rv ~ prs, prs.df), error = default.na)
   }) %>%
   unlist() %>%
-  tibble::enframe(name="prs", value="p.val")
+  tibble::enframe(name="cohort.name", value="p.val")
 
 cc.prs.pvals.lbls <- cc.prs.pvals.df %>%
   rowwise() %>%
-  mutate(stars = ifelse(p.val < 0.001, '***', ifelse(p.val < 0.01, '**', ifelse(p.val < 0.05, '*', ''))))
+  mutate(stars = ifelse(p.val < 0.001, '***', ifelse(p.val < 0.01, '**', ifelse(p.val < 0.05, '*', 'n.s.'))))
 
 cc.prs.pvals.df 
 
 # create plot ####
 
-(
+cc.prs.stats.df$cohort.name <- factor(cc.prs.stats.df$cohort.name, levels = names(cohort.dfs))
+
+cc.scatter <- (
   cc.prs.stats.df %>%
-  ggplot(aes(x = as.factor(rv), y = mean.prs, group = lbl)) +
-  geom_point(position = position_dodge(width = 0.2), size = 5) +
+  ggplot(aes(x = as.factor(rv), y = mean.prs, group = cohort.name)) +
+  geom_point(position = position_dodge(width = 0.2), size = 2) +
   geom_errorbar(
     aes(ymin = mean.prs - err.prs, ymax = mean.prs + err.prs),
     position = position_dodge(width = 0.2),
@@ -1117,7 +1180,7 @@ cc.prs.pvals.df
   ) +
   scale_x_discrete(labels = c("FALSE" = "RV-", "TRUE" = "RV+")) +
   scale_y_continuous(limits = c(-1, 1)) +
-  facet_wrap(~lbl) +
+  facet_wrap(~cohort.name) +
   labs(
     x = "",
     y = "Mean PRS",
@@ -1130,10 +1193,12 @@ cc.prs.pvals.df
     legend.position = "none",
     axis.title = element_text(size = 24, face = "bold"),
     strip.text = element_text(size = 11, face = "bold")
-  )
-  # geom_text(data = all.prs.pvals.lbls, aes(label = stars, y = upper.p.val.annot.loc), x = 2.33, vjust = 1.7, size = 10, show.legend=F)
+  ) +
+  geom_text(data = cc.prs.pvals.lbls, aes(label = stars, y = 0.95), x = 2.25, vjust = 1, size = 6, show.legend=F)
 ) %>%
   save.plot('cc.scatter', w = 4.5 * 2, h = 3, root.dir = PLOTS_DIR, sub.dir = 'collider')
+
+cc.scatter
 ```
 
 ## Plot collider effect as PRS tertiles bar plot
@@ -1158,7 +1223,7 @@ n.events.df <- rv.prs.df %>%
   ungroup() %>%
   pivot_longer(cols = all_of(names(gene.grps)), names_to = "gene.grp", values_to = "rv") %>%
   # anti_join(gene.excludes.df, by=c('sample.id', 'gene.grp')) %>%
-  unite(cohort, prs.name, col="cohort", sep='/') %>%
+  # unite(cohort, prs.name, col="cohort", sep='/') %>%
   select(sample.id, cohort, value, gene.grp, rv) %>%
   group_by(cohort, gene.grp) %>%
   mutate(prs.qnt = calc.quantile(value, n.qnt = 3, na.rm = T)) %>%
@@ -1167,15 +1232,15 @@ n.events.df <- rv.prs.df %>%
   group_by(gene.grp, cohort, prs.qnt) %>% summarize(n = n())
 
 # set label factor levels so plots display correctly ####
-cohort.lbl.levels <- COHORTS %>% purrr::imap(function(cohort, cohort.name) {
-  paste(cohort.name, cohort$prs, sep='/')
-})
+# cohort.lbl.levels <- COHORTS %>% purrr::imap(function(cohort, cohort.name) {
+#   paste(cohort.name, cohort$prs, sep='/')
+# })
 
 n.events.df$gene.grp <- factor(n.events.df$gene.grp, levels=names(gene.grps))
-n.events.df$cohort <- factor(n.events.df$cohort, levels=cohort.lbl.levels)
+n.events.df$cohort <- factor(n.events.df$cohort, levels=names(COHORTS))
 
 # create and save plot ####
-(
+tertiles.3x3 <- (
   n.events.df %>%
   ggplot(aes(x = factor(prs.qnt), y = n)) +
   geom_bar(
@@ -1185,12 +1250,12 @@ n.events.df$cohort <- factor(n.events.df$cohort, levels=cohort.lbl.levels)
     width = 1
   ) +
   facet_grid(rows = vars(cohort), cols = vars(gene.grp), scales = "free_y") +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.5))) +
   theme_bw() +
   theme(
     panel.grid = element_blank(),
     axis.text = element_text(size = 12, face = "bold"),
-    axis.ticks = element_line(linewidth = 2),
+    axis.ticks = element_line(linewidth = 1),
     legend.position = "none",
     axis.title = element_text(size = 24, face = "bold"),
     strip.text = element_text(size = 11, face = "bold")
@@ -1201,7 +1266,47 @@ n.events.df$cohort <- factor(n.events.df$cohort, levels=cohort.lbl.levels)
   )
 ) %>%
    save.plot('3x3.tertiles', w = 4.5 * 2, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'collider')
+
+tertiles.3x3 
 ```
+
+# Compose UKBB Collider Summary Plot
+
+```{r collider_summary_plot}
+composed.theme <- theme(
+  axis.title = element_text(face = 'bold', size = 10),
+  axis.text = element_text(face = 'bold', size = 9),
+  strip.text = element_text(face = 'bold', size = 12),
+)
+
+panel.a <- cc.scatter + composed.theme + scale_y_continuous(limits = c(-1, 1), breaks = c(-1, 0, 1))
+panel.b <- tertiles.3x3 + composed.theme + scale_y_continuous(labels = function(x) x)
+panel.c <- mt.dist + composed.theme +
+  theme(
+    legend.position = 'bottom',
+    legend.box = 'horizontal',
+    legend.text = element_text(face = 'bold', size = 12),
+    legend.key.width = unit(0.25, 'cm')
+  ) +
+  guides(fill = guide_legend(nrow = 2))
+
+(
+  (((panel.a / panel.b) + plot_layout(heights = c(2, 8))) | panel.c) /
+    guide_area() +
+    plot_layout(heights = c(6, 1)) +
+    plot_annotation(tag_levels = 'a', tag_suffix = ')') +
+    plot_layout(guides = 'collect')
+) %>%
+  save.plot('fig3', root.dir = PLOTS_DIR, sub.dir = 'composed')
+  
+list(
+  case.control.GvX = cc.prs.stats.df,
+  tertile.pos.samples = n.events.df,
+  rv.mt.alt.counts = alt.counts
+) %>%
+  saveRDS(file.path(OUT_DIR, 'fig3.RDS'))
+```
+
 
 # Perform Ancestry Confounder Control Analysis
 
@@ -1461,7 +1566,7 @@ knn.plots %>% map(function(i) i$results$p.val)
 
 # save results ####
 
-saveRDS(knn.results, file = file.path(OUT_DIR, 'knn.results.rds'))
+saveRDS(modifyList(knn.results, knn.plots), file = file.path(OUT_DIR, 'fig4.rds'))
 
 # display plots ####
 
@@ -1575,7 +1680,8 @@ for (cohort.name in names(COHORTS)) {
       alpha = 0.7,
       position = "identity"
     ) +
-    geom_vline(xintercept = z, linetype = "dashed", color = "black", size = 1.5) +
+    geom_vline(xintercept = z, linetype = "dashed", color = "red", size = 1.5) +
+    geom_vline(xintercept = quantile(p.dist.std, 0.05), linetype = "dashed", color = "black", size = 1.5) +
     scale_x_continuous(expand = c(0,0)) +
     scale_y_continuous(expand = c(0,0)) +
     theme_classic() +
@@ -1687,7 +1793,7 @@ purrr::map(a.ipw.results, ~.$p.val)
 saveRDS(a.ipw.results, file = file.path(OUT_DIR, 'a.ipw.results.rds'))
 ```
 
-## Supplementary LSD/PD "Genetic Load" Analysis
+# Supplementary LSD/PD "Genetic Load" Analysis
 
 Below we show that the causal collider signal is still present when considering
 RV status as an ordinal variable as opposed to a binary one. We consider the
@@ -1746,7 +1852,7 @@ lsd.boxplot <- lsd.df %>%
   theme(
     axis.text.x = element_text(size = 14, face = "bold"),
     axis.text.y = element_text(size = 14, face = "bold"),
-    axis.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 17, face = "bold"),
   ) +
   labs(
     y = "PRS",
@@ -1797,7 +1903,7 @@ lsd.dbl.heatmap <- lsd.pairs.long %>%
     panel.grid = element_blank(),
     axis.text.x = element_text(size = 12, face = "bold", angle = 45, hjust = 1),
     axis.text.y = element_text(size = 12, face = "bold"),
-    axis.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 17, face = "bold"),
   ) +
   labs(
     x = 'Gene 1',
@@ -1806,10 +1912,18 @@ lsd.dbl.heatmap <- lsd.pairs.long %>%
 
 save.plot(lsd.dbl.heatmap, 'heatmap', w = 4.5 * 2, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'LSD.burden')
 
-(lsd.boxplot + lsd.dbl.heatmap) %>%
-  save.plot('composed', root.dir = PLOTS_DIR, sub.dir = 'LSD.burden')
+(
+  (lsd.boxplot + lsd.dbl.heatmap) +
+    plot_annotation(tag_levels = 'a', tag_suffix = ')')
+) %>%
+  save.plot('fig5', root.dir = PLOTS_DIR, sub.dir = 'composed')
 
 # save results ####
 
-saveRDS(lsd.burden.model, file = file.path(OUT_DIR, 'burdenG.reverse.glm.rds'))
+list(
+  df = lsd.df,
+  lsd.glm = lsd.burden.model,
+  lsd.pairs = lsd.pairs
+) %>%
+  saveRDS( file = file.path(OUT_DIR, 'fig5.rds'))
 ```

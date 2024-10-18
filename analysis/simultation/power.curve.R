@@ -1,4 +1,4 @@
-RESULTS_DIR <- '~/ukb/.data/results/simulation/'
+RESULTS_DIR <- '.data/power_curves/'
 PLOTS_DIR <- file.path(RESULTS_DIR, 'plots')
 OUT_DIR <- file.path(RESULTS_DIR, 'out')
 
@@ -10,10 +10,11 @@ library(tidyr)
 library(dplyr)
 # lbl <- 'logitG_1500_v1'
 # lbl <- 'liabilityG_v3_stitched'
-lbl <- 'logitG_1024_beta0.5_optim_v1'
+# lbl <- 'logitG_1024_beta0.5_optim_v1'
 # lbl <- 'liabilityG_1024_beta0.5_optim_v1'
+lbl <- 'logitG_low_beta_test_4'
 
-lrt.result.dir <- file.path('~/ukb/.data/results/simulation/', lbl)
+lrt.result.dir <- file.path('.data/results/', lbl)
 
 lrt.result <- lapply(
     dir(lrt.result.dir),
@@ -112,7 +113,7 @@ power.curve <- compare.df %>%
   ggplot(aes(x = gamma, y = power, color = model)) +
   scale_color_manual(values = model.colors) +
   geom_line(aes(linetype = eta, linewidth = interaction(model, eta)), data = subset(compare.df, compare == 'smooth')) +
-  # geom_point(aes(shape = eta, size = interaction(model, eta)), data = subset(compare.df, compare == 'og')) +
+  geom_point(aes(shape = eta, size = interaction(model, eta)), data = subset(compare.df, compare == 'og')) +
   scale_shape_manual(values = c('0' = 20, '0.1' = 21)) +
   # scale_shape_manual(values = c(
   #   'fwd.0' = 16,

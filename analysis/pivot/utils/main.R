@@ -7,36 +7,69 @@ conflict_prefer("filter", "dplyr", quiet = T)
 
 options(dplyr.summarise.inform = F)
 
-concat.df.list <- function(df.list, keycol = "key") {
+concat.df.list <- function(df.list, key.cols) {
   # concatenates a list of dataframes into a single dataframe
   # the keys of the list are added to a new column named keycol
+  # also accepts list of objects that can be converted to dataframes
   #
   # @param df.list  list of dataframes
   # @param  keycol  the name of the added column
   #
   # @returns  row concatenated dataframe with additional key column
   
-  dfs.colnames <- df.list %>% map(~colnames(.x)) %>% unlist() %>% unique()
-  
-  df.all <- as.data.frame(matrix(
-    numeric(),
-    nrow = 0,
-    ncol = length(dfs.colnames) + 1,
-    dimnames = list(NULL, c(dfs.colnames, keycol))
-  ))
-  
-  dfs <- list()
-  
-  for (key in names(df.list)) {
-    d <- df.list[[key]]
-    if (nrow(d) == 0) {
-      next
-    }
-    d[[keycol]] = key
-    dfs[[key]] <- d
+  if (length(key.cols) == 1) {
+    return(
+      df.list %>%
+        purrr::imap(function(df, key) {
+          df <- as.data.frame(df)
+          if (nrow(df) == 0) {
+            return(NULL)
+          }
+          df[[key.cols]] <- key
+          df
+        }) %>%
+        do.call(rbind, .)
+    )
   }
   
-  bind_rows(dfs)
+  concat.df.list(purrr::map(df.list, ~ concat.df.list(.x, key.cols = key.cols[-1])), key.cols = key.cols[1])
+  # browser()
+  # dfs.colnames <- df.list %>% map(~names(.x)) %>% unlist() %>% unique()
+  # 
+  # df.all <- as.data.frame(matrix(
+  #   numeric(),
+  #   nrow = 0,
+  #   ncol = length(dfs.colnames) + 1,
+  #   dimnames = list(NULL, c(dfs.colnames, keycol))
+  # ))
+  # 
+  # dfs <- list()
+  # 
+  # for (key in names(df.list)) {
+  #   d <- as.data.frame(df.list[[key]]) # when given list of lists
+  #   if (nrow(d) == 0) {
+  #     next
+  #   }
+  #   d[[keycol]] = key
+  #   dfs[[key]] <- d
+  # }
+  # 
+  # bind_rows(dfs)
+}
+
+extract.leaf <- function(root, leaf.key) {
+  # extracts a "leaf" from a nested list structure
+  # useful for extracting results from another map or lapply
+  # that return multiple result types via lists
+  if (!is.list(root)) {
+    return(NULL)
+  }
+  
+  if (leaf.key %in% names(root)) {
+    return(root[[leaf.key]])
+  }
+  
+  map(root, ~ extract.leaf(.x, leaf.key))
 }
 
 calc.quantile <- function(vals, n.qnt, na.rm = F) {

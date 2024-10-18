@@ -189,7 +189,45 @@ define.logitG.equations <- function() {
       DGamma(omega, alpha, beta, gamma, eta, X, Y, G, cases.only),
       # cases only cumulative derivative wrt eta
       DEta(omega, alpha, beta, gamma, eta, X, Y, G, cases.only)
-    ) 
+    )
+  }
+  
+  fisher.info <- function(omega, alpha, beta, gamma, eta, X, Y, G) {
+    calc.I <- function(omega, alpha, beta, gamma, eta, X, dGamma, dEta) {
+      f.params <- list(
+        omega = omega,
+        alpha = alpha,
+        beta = beta,
+        gamma = gamma,
+        eta = eta,
+        X = X
+      )
+      g <- f.call(dGamma, f.params)
+      e <- f.call(dEta, f.params)
+      outer.product <- mapply(function(x, y) outer(c(x,y), c(x,y)), g, e, SIMPLIFY=F)
+      Reduce("+", outer.product) / length(outer.product)
+    }
+    
+    grp1 <- which(Y == 1 & G == 1)
+    grp2 <- which(Y == 1 & G == 0)
+    grp3 <- which(Y == 0 & G == 1)
+    grp4 <- which(Y == 0 & G == 0)
+    
+    I1 <- calc.I(omega, alpha, beta, gamma, eta, X[grp1], DR1Gamma, DR1Eta)
+    I2 <- calc.I(omega, alpha, beta, gamma, eta, X[grp2], DR2Gamma, DR2Eta)
+    I3 <- calc.I(omega, alpha, beta, gamma, eta, X[grp3], DR3Gamma, DR3Eta)
+    I4 <- calc.I(omega, alpha, beta, gamma, eta, X[grp4], DR4Gamma, DR4Eta)
+    
+    list(
+      n1 = length(grp1),
+      I1 = I1,
+      n2 = length(grp2),
+      I2 = I2,
+      n3 = length(grp3),
+      I3 = I3,
+      n4 = length(grp4),
+      I4 = I4
+    )
   }
   
   list(
@@ -198,7 +236,8 @@ define.logitG.equations <- function() {
     L = L,
     DGamma = DGamma,
     DEta = DEta,
-    LL = LL
+    LL = LL,
+    fisher.info = fisher.info
   )
 }
 
