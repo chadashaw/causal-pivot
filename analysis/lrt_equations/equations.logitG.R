@@ -232,6 +232,10 @@ define.logitG.equations <- function() {
   
   list(
     sim = sim,
+    DR1Gamma = DR1Gamma,
+    DR2Gamma = DR2Gamma,
+    DR1Eta = DR1Eta,
+    DR2Eta = DR2Eta,
     D = D,
     L = L,
     DGamma = DGamma,
