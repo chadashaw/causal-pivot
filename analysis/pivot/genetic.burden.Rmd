@@ -1,0 +1,194 @@
+---
+title: "PD Genetic Burden"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+---
+
+Show the causal collider signal is still present when considering
+RV status as an ordinal variable (as opposed to a binary variable).
+We consider the "genetic load" of rare deleterious and ClinVar pathogenic variants
+within a set of genes related to Lysosomal Storage Disease.
+We then observe the collider signal between this variable and PD PRS in PD cases.
+Finally, we observe the sparcity of co-occurance of events in the pathway,
+showing not one gene pair dominates effect.
+
+
+```{r collider_plots_deps, include=F}
+# library(paletteer, quietly = T, warn.conflicts = F)
+# library(waffle, quietly = T, warn.conflicts = F)
+library(patchwork, quietly = T, warn.conflicts = F)
+source("utils/main.R")
+source("utils/data.R")
+source("utils/variant.classifiers.R")
+
+cohort.dfs <- readRDS(file.path(OUT_DIR, 'cohort.dfs.rds'))
+geno.mtx <- readRDS(file.path(DATA_DIR, 'geno.mtx.rds'))
+annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
+
+lsd.genes <- readLines(file.path(SRC_DATA_DIR, 'LSD_human_genes.txt'))
+prs.sig.marker.ids <- readRDS(file.path(DATA_DIR, 'prs.sig.marker.ids.rds'))
+```
+
+```{r lsd_burden}
+# classify pathogenic variants in the LSD gene list ####
+lsd.rv.flags <- annotations %>%
+  filter(gene %in% lsd.genes) %>%
+  mutate(
+    class.rare = gnomad3.af_nfe < gnomad.cutoff,
+  ) %>%
+  classify.clinvar() %>%
+  classify.lof() %>%
+  class.na.false() %>%
+  mutate(
+    class.positive = class.clinvar.pathogenic | (class.rare & class.loss.of.function)
+  ) %>%
+  select(marker.id, gene, class.positive)
+
+# remove variants previously associated w/ PRS ####
+
+lsd.rv.flags$pathogenic <- lsd.rv.flags$class.positive &
+  !(lsd.rv.flags$marker.id %in% prs.sig.marker.ids)
+
+# get positive LSD gene named vector for GT aggregation ####
+
+lsd.pos <- lsd.rv.flags %>%
+  filter(pathogenic & gene %in% lsd.genes) %>%
+  with(setNames(gene, marker.id))
+
+# calculate RV status for each LSD gene ####
+
+lsd.events <- alt.sums.by.var(
+  geno.mtx[,match(names(lsd.pos), colnames(geno.mtx))] > 0,
+  lsd.pos
+)
+
+# calculate total number of LSD events per sample ####
+
+lsd.df <- cbind(cohort.dfs$PD, n = rowSums(lsd.events)[match(cohort.dfs$PD$sample.id, rownames(lsd.events))])
+
+# logistic model of genetic load collider signal ####
+
+lsd.burden.model <- broom::tidy(glm(n ~ prs, family = poisson(link = "log"), data = lsd.df[lsd.df$case,]))
+
+lsd.burden.model
+
+# analyze doubletons ####
+
+pd.sample.ids <- cohort.dfs$PD[cohort.dfs$PD$case,]$sample.id
+
+# calculate pairwise matrix of num samples w/ genetic load == 2 (doubletons) ####
+
+lsd.dbl <- lsd.events[rowSums(lsd.events) == 2,]
+lsd.dbl <- lsd.dbl[na.omit(match(pd.sample.ids, rownames(lsd.dbl))),]
+lsd.dbl <- lsd.dbl[,colSums(lsd.dbl) > 0]
+lsd.pairs <- lsd.dbl %>% apply(2, function(g1) {
+  apply(lsd.dbl, 2, function(g2) {
+    sum(g1 & g2)
+  })
+})
+
+lsd.pairs.long <- as.data.frame(lsd.pairs) %>%
+  mutate(g1 = rownames(.)) %>%
+  pivot_longer(cols = -g1, names_to = 'g2', values_to = 'n')
+
+
+# save results ####
+
+list(
+  df = lsd.df,
+  lsd.glm = lsd.burden.model,
+  lsd.pairs = lsd.pairs
+) %>%
+  saveRDS( file = file.path(OUT_DIR, 'fig5.rds'))
+```
+```{r lsd_burden_plots}
+# create PD/LSD genetic load collider boxplot ####
+
+lsd.burden.df <- lsd.df %>%
+  filter(case) %>%
+  mutate(n = as.factor(map_chr(n, ~ ifelse(.x < 2, as.character(.x), '2+'))))
+
+lsd.boxplot <- lsd.burden.df %>%
+  ggplot(aes(x = n, y = prs)) +
+  geom_boxplot(fill = 'gray', linewidth = 0.53) +
+  theme_bw(base_family = "Arial") +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 7, face = "bold"),
+    axis.text.y = element_text(size = 7, face = "bold"),
+    axis.title = element_text(size = 8, face = "bold"),
+  ) +
+  geom_text(
+    label = p.val.stars(lsd.burden.model[2,5])[1,1],
+    x = 3,
+    y = 3,
+  ) +
+  labs(
+    y = "PRS",
+    x = expression(bold("RV"^"+"*" Burden"))
+  )
+
+# create doubleton heatmap ####
+
+lsd.dbl.heatmap <- lsd.pairs.long %>%
+  ggplot(aes(x = g1, y = g2, fill = n)) +
+  geom_tile(aes(width = 1, height = 1), fill = NA, color = "grey50") +
+  geom_tile(width = 0.8, height = 0.8) +
+  scale_fill_gradientn(
+    colours = c("white", "#f42e3d"),
+    breaks = 0:max(lsd.pairs.long$n)
+  ) +
+  theme_bw(base_family = "Arial") +
+  theme(
+    aspect.ratio = 1,
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 7, face = "bold", angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 7, face = "bold"),
+    axis.title = element_text(size = 8, face = "bold"),
+  ) +
+  labs(
+    x = 'Gene 1',
+    y = 'Gene 2',
+  )
+
+# save.plot(lsd.boxplot, 'boxplot', w = 4.5 * 2, h = 4.5 * 2,  root.dir = PLOTS_DIR, sub.dir = 'LSD.burden')
+
+# save.plot(lsd.dbl.heatmap, 'heatmap', w = 4.5 * 2, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'LSD.burden')
+
+lsd.burden.p.stars.grob <- grid::textGrob(
+  "* p < 0.05",
+  x = 0,
+  y = 0,
+  hjust = 0,
+  vjust = 0,
+  just = "left",
+  gp = grid::gpar(fontsize = 10, fontface = "bold", family = "Arial")
+)
+
+(
+  (lsd.boxplot + lsd.dbl.heatmap) +
+    plot_annotation(tag_levels = 'A', tag_suffix = ')') +
+    inset_element(
+      lsd.burden.p.stars.grob,
+      left = -1.5,
+      right = -1.25,
+      bottom = -0.22,
+      top = -0.88,
+      ignore_tag = T
+    )
+) %>%
+  save.plot(
+    'fig5',
+    root.dir = PLOTS_DIR,
+    sub.dir = 'composed',
+    w = 6.5,
+    h = 3.65625
+  )
+```
+

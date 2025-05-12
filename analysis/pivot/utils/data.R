@@ -2,6 +2,39 @@ library(dplyr, quietly = T, warn.conflicts = F)
 
 default.na <- function(err) NA
 
+p.val.stars <- function(p.val) {
+  if (is.na(p.val) || is.null(p.val)) {
+    return('n.a')
+  }
+  
+  ifelse(p.val < 0.001,
+    '***', 
+    ifelse(p.val < 0.01,
+      '**',
+      ifelse(p.val < 0.05,
+        '*',
+        'n.s.'
+      )
+    )
+  )
+}
+
+perm.test <- function(t, p.dist) {
+  u <- mean(p.dist) # mean of permutation distribution
+  o <- sd(p.dist) # standard deviation of permutation distribution
+  z <- (t - u) / o # z score of observed statistic
+  p.val <- pnorm(z) # p.value of test
+  p.dist.std <- (p.dist - u) / o # standardized distribution
+  
+  list(
+    u  = u,
+    o = o,
+    z = z,
+    p.val = p.val,
+    p.dist.std = p.dist.std
+  )
+}
+
 convert.marker.ids <- function(marker.ids) {
   # converts CSRA marker IDs to consistent format
   # used to match direct CSRA IDs to Open Cravat format

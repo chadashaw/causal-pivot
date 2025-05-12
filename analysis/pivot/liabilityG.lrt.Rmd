@@ -1,0 +1,188 @@
+---
+title: "liabilityG LRT"
+output: html_document
+---
+
+```{r lrt_liability_deps}
+library(paletteer, quietly = t, warn.conflicts = f)
+library(waffle, quietly = t, warn.conflicts = f)
+library(patchwork, quietly = t, warn.conflicts = f)
+source("utils/main.R")
+source("utils/data.R")
+source("utils/lrt.R")
+
+cohort.meta <- readRDS(file.path(DATA_DIR, 'cohort.meta.rds'))
+cohorts <- readRDS(file.path(DATA_DIR, 'cohorts.rds'))
+cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
+gene.lkps <- readRDS(file.path(DATA_DIR, 'gene.lkps.rds'))
+
+cohort.dfs <- readRDS(file.path(OUT_DIR, 'cohort.dfs.rds'))
+rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
+```
+
+
+## Liability G
+
+```{r, echo=F}
+if(!exists("n.mle.perms")) n.mle.perms <- 8
+writeLines(paste0("n.mle.perms=", n.mle.perms), con = file.path(OUT_DIR, "n.mle.perms"))
+```
+
+The equations for the Logit G model are given in
+[equations.liabilityG.R](../lrt_equations/equations.liabilityG.R).
+
+```{r lrt_liabilityG_HC190, cache=T}
+# source MLE functions and load into local environment ####
+source('../lrt_equations/equations.liabilityG.R')
+lrt.liabilityG.equations <- define.liabilityG.equations(cases.only=T)
+
+# perform MLE testing for HC190 ####
+
+hc.cohort.df <- cohort.dfs$HC190 %>%
+  left_join(select(cohort.meta, sample.id, ldl = ldl.inst.0), by = 'sample.id')
+
+liabilityG.lrt.run <- purrr::map(unname(cohort.lkps$gene.grp), function(gene.grp) {
+  # massage data
+  G.df <- rv.prs.df[c('sample.id', gene.grp)]
+  colnames(G.df) <- c('sample.id', 'G')
+  lrt.df <- hc.cohort.df %>%
+    left_join(G.df, by = 'sample.id') %>%
+    mutate(
+      y = (ldl - mean(ldl)) / sd(ldl),
+      G = as.integer(G),
+      X = prs
+    ) %>%
+    select(y, X, G)
+  
+  # calculate forward model paramter "targets"
+  lrt.target.model <- broom::tidy(lm(y ~ G * X, data = lrt.df))
+
+  # estimate model parameters (alpha, beta, delta, sige, omege)
+  lrt.est.model <- lm(y ~ X, data = lrt.df)
+  
+  params <- list(
+    alpha = broom::tidy(lrt.est.model)$estimate[1],
+    beta = broom::tidy(lrt.est.model)$estimate[2],
+    gamma = 0,
+    eta = 0,
+    delta = unname(quantile(lrt.df$y, prob = mean(hc.cohort.df < 4.9))),
+    sige = sqrt(mean(lrt.est.model$residuals^2)),
+    omega = mean(lrt.df$G)
+  )
+  
+  # calculate MLE result
+  mle.run <- run.lrt(as.list(lrt.df), params, lrt.liabilityG.equations)
+
+  # calculate permutation distribution of MLE results under G
+  perm.result <- lapply(seq(n.mle.perms), function(i) {
+    r <- run.lrt(as.list(mutate(lrt.df, G = sample(G))), params, lrt.liabilityG.equations)
+  }) %>%
+    do.call(bind_rows, .) %>%
+    as.data.frame()
+
+  list(
+    params = params,
+    mle.target = lrt.target.model,
+    mle.run = mle.run,
+    perm.result = perm.result
+  )
+}) %>%
+  purrr::set_names(cohort.lkps$gene.grp)
+
+c('params', 'mle.target', 'mle.run', 'perm.result') %>%
+  purrr::set_names(paste('liabilityG', ., sep = '.')) %>%
+  purrr::map(function(leaf.key) {
+    concat.df.list(extract.leaf(liabilityG.lrt.run, leaf.key), key.cols = c('gene.grp')) %>%
+      mutate(gene.grp = factor(gene.grp, levels = cohort.lkps$gene.grp))
+  }) %>%
+  list2env(mle.objs, envir = .GlobalEnv)
+
+# calculate the 95th quantile of the LR permutation distribution
+liabilityG.perm.q95 <- liabilityG.perm.result %>%
+  group_by(gene.grp) %>%
+  summarize(lr = q.95 <- quantile(lr, 0.95, na.rm = T))
+
+# calculate p.values for the cohorts based on 95th quantile of LR permutations
+liabilityG.mle.p.vals <- inner_join(liabilityG.mle.run, liabilityG.perm.result, by = 'gene.grp', suffix = c('.mle', '.perm')) %>%
+  group_by(gene.grp) %>%
+  summarize(p.val = mean(lr.perm > lr.mle))
+
+# plot results ####
+
+(
+  liabilityG.perm.result %>%
+  ggplot(aes(x = lr)) +
+  facet_wrap(~gene.grp, scales = 'free') +
+  geom_histogram(bins = 14) +
+  geom_vline(aes(xintercept = lr), linewidth = 1, linetype = 'dashed', color = '#f42e3d', data = liabilityG.mle.run) +
+  geom_vline(aes(xintercept = lr), linewidth = 1, linetype = 'dashed', data = liabilityG.perm.q95) +
+  labs(
+    y = 'Count',
+    x = 'Log Likelihood',
+  )
+) %>%
+  save.plot('liabilityG.MLE.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation')
+
+(
+  lapply(gene.lkps$grp.to.genes, function(my.gene.grp) {
+  mle.perm <- liabilityG.perm.result %>%
+    filter(gene.grp == my.gene.grp)
+  mle.observed <- liabilityG.mle.run %>%
+    filter(gene.grp == my.gene.grp)
+  mle.target <- liabilityG.mle.target %>%
+    filter(gene.grp == my.gene.grp) %>%
+    filter(term %in% c('G', 'G:X')) %>%
+    select(term, estimate) %>%
+    pivot_wider(names_from = 'term', values_from = 'estimate') %>%
+    select(gamma = G, eta = `G:X`)
+  mle.perm %>%
+    ggplot(aes(x = gamma, y = eta)) +
+    geom_density_2d_filled(alpha = 0.4, bins = 4) +
+    geom_density_2d(color = "black", bins = 4) +
+    # geom_point(shape = 1, size = 1/3, alpha = 1/3) +
+    geom_vline(xintercept = 0, linewidth = 0.53, linetype = 'dotted') +
+    geom_hline(yintercept = 0, linewidth = 0.53, linetype = 'dotted') +
+    geom_point(x = mle.target$gamma, y = mle.target$eta,
+      color = "black", size = 3, shape = 4, stroke = 1) +
+    geom_point(color = "#f42e3d", size = 3, shape = 16, data = mle.observed) +
+    scale_fill_brewer(palette = 'PuBu') +
+    scale_x_continuous(limits = c(-0.5, 1.5)) +
+    scale_y_continuous(limits = c(-0.5, 0.5)) +
+    labs(
+      x = expression(gamma),
+      y = expression(eta),
+    ) +
+    theme_bw(base_family="Arial") +
+    theme(
+      legend.position = 'none',
+      plot.background = element_rect(fill = "white", color = NA),
+      axis.text = element_text(size=8),
+      axis.title = element_text(size=10, family = "Arial", face = "bold"),
+    )
+  }) %>%
+    {
+      c(., map(gene.lkps$grp.to.genes, ~grid::textGrob(.x, rot = -90)) )
+    } %>%
+    wrap_plots(
+      nrow = 3,
+      byrow = F,
+      widths = c(5, 1)
+    ) +
+    plot_layout(
+      axis_titles = 'collect'
+    )
+) %>%
+  save.plot('liabilityG.MLE.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 3.34, h = 3.34)
+  
+# save results ####
+liabilityG.lrt.result <- list(
+  params = liabilityG.params,
+  mle.run = liabilityG.mle.run,
+  mle.p.vals = liabilityG.mle.p.vals,
+  perm.result = liabilityG.perm.result
+  # fisher.information = liabilityG.fisher.information,
+  # liabilityG.conf.int = liabilityG.conf.int
+)
+
+saveRDS(liabilityG.lrt.result, file.path(OUT_DIR, 'liabilityG.lrt.result.RDS'))
+```

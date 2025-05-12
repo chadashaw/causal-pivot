@@ -1,0 +1,306 @@
+---
+title: "Rare Variant Summaries"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+---
+
+```{r rv_summaries_deps, include=F}
+library(paletteer, quietly = T, warn.conflicts = F)
+library(waffle, quietly = T, warn.conflicts = F)
+source("utils/main.R")
+source("utils/data.R")
+
+rv.flags <- readRDS(file.path(OUT_DIR, 'rv.flags.rds'))
+cohort.dfs <- readRDS(file.path(OUT_DIR, 'cohort.dfs.rds'))
+rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
+
+cohorts <- readRDS(file.path(DATA_DIR, 'cohorts.rds'))
+gene.lkps <- readRDS(file.path(DATA_DIR, 'gene.lkps.rds'))
+annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
+cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
+cohort.marks <- readRDS(file.path(DATA_DIR, 'cohort.marks.rds'))
+rv.mtx <- readRDS(file.path(DATA_DIR, 'rv.mtx.rds'))
+```
+
+## Create publishable variant Excel workbook
+
+Export pathogenic rare variant data to Excel
+for supplemental materials and analysis.
+
+```{r export_excel, cache=T}
+local({
+  prs.cohort.summary.df <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
+    gene.grp <- cohort.lkps$gene.grp[cohort.name]
+    cohort.rv.marker.ids <- rv.flags[rv.flags$gene == gene.grp & rv.flags$pathogenic,]$marker.id
+    cohort.gts <- as.data.frame(as.matrix(rv.mtx[cohort.df$sample.id,cohort.rv.marker.ids] ))
+    n.control <- sum(!cohort.df$case)
+    n.case <- sum(cohort.df$case)
+    purrr::imap(cohort.gts, function(gts, marker.id) {
+      cohort.df$gt <- gts[match(cohort.df$sample.id, rownames(cohort.gts))]
+      
+      freq.df <-  cohort.df %>%
+        group_by(case) %>%
+        summarize(f = mean(gt)) %>%
+        ungroup()
+      
+      cohort.df %>%
+        group_by(case) %>%
+        filter(gt == 1) %>%
+        summarize(prs.mean = mean(prs), n = n()) %>%
+        ungroup() %>%
+        mutate(marker.id = marker.id) %>%
+        ungroup() %>%
+        inner_join(freq.df, by = 'case')
+    }) %>%
+        do.call(bind_rows, .)
+  }) %>% concat.df.list(key.cols = 'cohort.name') %>%
+    mutate(case = ifelse(case, 'case', 'control')) %>%
+    pivot_wider(id_cols = c('cohort.name', 'marker.id'), names_from = 'case', values_from = c('prs.mean', 'f', 'n')) %>%
+    select(
+      `Marker` = 'marker.id',
+      `Cohort` = 'cohort.name',
+      `Mean PRS (Controls)` = 'prs.mean_control',
+      `Mean PRS (Cases)` = 'prs.mean_case',
+      `RV+ Count (Controls)` = 'n_control',
+      `RV+ Count (Cases)` = 'n_case',
+      `RV+ Frequency (Controls)` = 'f_control',
+      `RV+ Frequency (Cases)` = 'f_case' 
+    )
+  
+  rv.summary.df <- annotations %>%
+    filter(marker.id %in% rv.flags[rv.flags$pathogenic,]$marker.id) %>%
+    mutate(cohort.af = apply(rv.mtx, 2, mean)[match(marker.id, colnames(rv.mtx))]) %>%
+    select(
+      `Marker` = marker.id,
+      `Gene` = gene,
+      `Transcript` = transcript,
+      `Chrom` = chrom,
+      `Position` = pos,
+      `Ref` = ref,
+      `Alt` = alt,
+      `c.` = cchange,
+      `a.` = achange,
+      `gnomAD AF` = gnomad3.af_nfe,
+      `UKB AF` = cohort.af,
+      `ClinVar ID` = clinvar.allele_id,
+      `Clinvar Significance` = clinvar.sig,
+      `Clinvar Sign. Conflicting` = clinvar.sig_conf,
+      `Revel` = revel.score,
+      `CADD` = cadd_exome.phred,
+    )
+  
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Annotations")
+  openxlsx::writeData(wb, "Annotations", rv.summary.df)
+  openxlsx::addWorksheet(wb, "PRS + Counts")
+  openxlsx::writeData(wb, "PRS + Counts", prs.cohort.summary.df)
+  openxlsx::saveWorkbook(wb, file.path(OUT_DIR, 'rv.summary.xlsx'), overwrite = T)
+})
+```
+
+## Plot variant classification summaries
+
+### Variant mutation type waffle plot
+
+Plot pathogenic rare variants by sequence ontology.
+
+A waffle plot gives an intuitive feel for proportion of variants by sequence ontology
+showing signals are not dominated by a single mutation type (`MT`).
+
+```{r plot_variant_mutation_type_waffle, cache=T}
+# create positive variants data frame w/ mutation types ####
+
+mt.df <- left_join(
+  filter(rv.flags, pathogenic),
+  select(annotations, marker.id, mutation.type),
+  by = 'marker.id'
+) %>%
+  mutate(mutation.type = as.factor(snakecase::to_title_case(mutation.type))) %>%
+  group_by(gene, mutation.type) %>%
+  summarize(n = n())  %>%
+  ungroup() %>%
+  mutate(gene = factor(gene, levels = gene.lkps$grp.to.genes))
+
+# create plot ####
+
+# get sorted list of mutation type by most common - used to make color palette
+mt.palette <- paletteer_d(
+    "ggthemes::Classic_20",
+    n = length(levels(mt.df$mutation.type))
+  ) %>%
+  purrr::set_names(levels(mt.df$mutation.type))
+
+(
+  mt.df %>%
+    ggplot(aes(fill = mutation.type, values = n)) +
+    geom_waffle(size = 0.33, colour = "white") +
+    coord_equal() +
+    facet_wrap(~gene) +
+    labs(fill = 'Sequence Ontology') +
+    theme_void(base_family="Arial") +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      # axis.text = element_text(size=8),
+      # axis.title = element_text(size=8, family = "Arial", face = "bold"),
+      legend.text = element_text(size=6),
+      legend.title = element_text(size=8),
+      # plot.margin = ggplot2::margin(0.25),
+      legend.key.width = unit(0.8, "lines"),
+      legend.key.height = unit(0.8, "lines"),
+      axis.title.x = element_blank()
+    )
+) %>%
+  save.plot('supp.fig5', w = 4.5, h = 4.5 * 9 / 16, root.dir = PLOTS_DIR, sub.dir = 'supplementary')
+
+saveRDS(mt.df, file.path(OUT_DIR, 'rv.mutation.type.rds'))
+```
+
+### Variant spread hisogram
+
+Plot histogram summarizing variant mutation type
+and how variants are distributed among cohorts.
+The x axis is the number of samples in which a variant appears:
+
+  - bars to the left are rarer variants
+  - bars to the right are more common
+
+The `max` annotation is the maximum number of samples in which a single
+positive variant appears.
+
+This plot further shows the causal pivot signal is not carried by a single
+functional type.
+
+```{r plot_variant_spread_histogram, cache=T}
+# create dataframe counting positive samples per variants w/ SO annotation ####
+
+alt.counts <- alt.sums.by.sample(rv.mtx, cohort.marks) %>%
+  mtx.to.df('cohort', 'marker.id', 'alt.count') %>%
+  left_join(select(annotations, marker.id, gene, mutation.type), by = 'marker.id') %>%
+  mutate(mutation.type = as.factor(snakecase::to_title_case(mutation.type))) %>%
+  rowwise() %>%
+  filter(gene %in% cohorts[[cohort]]$genes) %>%
+  ungroup() %>%
+  mutate(cohort = factor(cohort, levels = names(cohort.dfs)))
+
+# calculate maximum number of count groups per cohort - used to place label
+max.n <- alt.counts %>%
+  group_by(cohort) %>%
+  count(alt.count) %>%
+  summarize(max.n = max(n)) %>%
+  ungroup()
+
+# create count group aggregation dataframe used for annotation
+max.counts <- alt.counts %>%
+  group_by(cohort) %>%
+  summarize(max.count = max(alt.count)) %>%
+  left_join(max.n, by = 'cohort') %>%
+  rowwise() %>%
+  mutate(label = paste("Max: ", max.count)) %>%
+  ungroup()
+
+# generate actual plot and save
+mt.newline.palette <- mt.palette
+names(mt.newline.palette) <- gsub(' ', '\n', names(mt.newline.palette))
+mt.dist <- (
+  alt.counts %>%
+  mutate(
+    n.samples = factor(ifelse(alt.count > 5, ">5", as.character(alt.count)), levels = c("1", "2", "3", "4", "5", ">5")),
+  ) %>%
+  group_by(cohort, mutation.type, n.samples) %>%
+  summarize(n.markers = n()) %>%
+  mutate(
+    mutation.type = gsub(' ', '\n', mutation.type)
+  ) %>%
+  ggplot(aes(x = n.samples, y = n.markers)) +
+  geom_col(aes(fill = mutation.type), color = "white", linewidth = 0.53) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  scale_fill_manual(values = mt.newline.palette) +
+  facet_wrap(~cohort, scales='free_y') +
+  labs(
+    x = 'Sample Counts',
+    y = 'Num Markers',
+    # title = paste("Variant Distribution Histogram w/ Sequence Ontology"),
+    title = '',
+    fill = "Mutation Type"
+  ) +
+  theme_bw(base_family="Arial") +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_text(face = 'bold', size = 8),
+    axis.text = element_text(face = 'bold', size = 7),
+    strip.text = element_text(face = 'bold', size = 8),
+    legend.title = element_text(size = 8),
+    strip.background = element_rect(fill = "white")
+  ) +
+  geom_label(
+    data = max.counts,
+    aes(label = label, y = max.n),
+    x = 4,
+    size = 6,
+    size.unit = "pt",
+    # color = "black",
+    # fill = "white",
+    # label.size = NA
+  )
+) %>%
+  save.plot(
+    'mutation_type.distribution',
+    root.dir = PLOTS_DIR,
+    sub.dir = 'supplementary',
+    w = 6.5,
+    h = 4.5
+  )
+
+mt.dist
+# save results ####
+
+# create useful rv count summary
+rv.counts <- alt.counts %>%
+  group_by(cohort, gene, alt.count) %>%
+  summarize(n = n())
+
+saveRDS(mt.dist, file = file.path(DATA_DIR, 'mt.dist.rds'))
+saveRDS(alt.counts, file = file.path(OUT_DIR, 'alt.counts.rds'))
+saveRDS(rv.counts, file = file.path(OUT_DIR, 'rv.counts.rds'))
+```
+
+
+# Age Confounding
+
+```{r age_conf, eval=F}
+# library(clipr)
+library(knitr)
+cohort.age.conf.df <- purrr::map(cohort.dfs, function(cohort.df) {
+  broom::tidy(glm(case ~ age * prs * rv, family = binomial(link = 'logit'), data = cohort.df))
+}) %>%
+  concat.df.list(key.cols = 'cohort') %>%
+  filter(term != '(Intercept)')
+cohort.pivot.age.conf.df <- purrr::map(cohort.dfs, function(cohort.df) {
+  broom::tidy(glm(rv ~ age * prs, family = binomial(link = 'logit'), data = cohort.df %>% filter(case)))
+}) %>%
+  concat.df.list(key.cols = 'cohort') %>%
+  filter(term != '(Intercept)')
+
+concat.df.list(cohort.dfs, key.cols = 'cohort') %>%
+  mutate(rv = ifelse(rv, 'rv+', 'rv-')) %>%
+  ggplot(aes(x = prs, y = age)) +
+  geom_density_2d_filled(alpha = 1/3, bins = 7) +
+  geom_density_2d(aes(color = case), alpha = 0.7) +
+  facet_grid(cols = vars(cohort), rows = vars(rv)) +
+  labs(title = '2D Confounders Density Plot')
+
+concat.df.list(cohort.dfs, key.cols = 'cohort') %>%
+  filter(case) %>%
+  mutate(rv = ifelse(rv, 'rv+', 'rv-')) %>%
+  ggplot(aes(x = prs, y = age)) +
+  geom_density_2d_filled(alpha = 1/3, bins = 7) +
+  geom_density_2d(color = 'black', alpha = 0.7) +
+  facet_grid(cols = vars(cohort), rows = vars(rv)) +
+  labs(title = '2D Confounders Density Plot (Cases Only)')
+```

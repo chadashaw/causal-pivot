@@ -1,0 +1,1189 @@
+```{r ancestry_control_deps}
+# library(paletteer, quietly = T, warn.conflicts = F)
+# library(waffle, quietly = T, warn.conflicts = F)
+# library(distances, quietly = T, warn.conflicts = F)
+library(Rtsne, quietly = T, warn.conflicts = F)
+library(patchwork, quietly = T, warn.conflicts = F)
+source("utils/main.R")
+source("utils/data.R")
+
+cohorts <- readRDS(file.path(DATA_DIR, 'cohorts.rds'))
+geno.mtx <- readRDS(file.path(DATA_DIR, 'geno.mtx.rds'))
+rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
+
+rv.flags <- readRDS(file.path(OUT_DIR, 'rv.flags.rds'))
+cohort.meta <- readRDS(file.path(DATA_DIR, 'cohort.meta.rds'))
+annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
+prs <- readRDS(file.path(OUT_DIR, 'prs.rds'))
+cohort.meta <- readRDS(file.path(DATA_DIR, 'cohort.meta.rds'))
+
+gene.lkps <- readRDS(file.path(DATA_DIR, 'gene.lkps.rds'))
+# annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
+# cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
+# cohort.marks <- readRDS(file.path(DATA_DIR, 'cohort.marks.rds'))
+# rv.mtx <- readRDS(file.path(DATA_DIR, 'rv.mtx.rds'))
+```
+
+```{r ancestry_control_new_rv_spec}
+# this is similar to code in setup.Rmd but
+# we include markers strongly associated w/ PCs
+rv.gene.marks <- rv.flags %>%
+  filter(class.positive) %>% # here's the difference
+  select(marker.id, gene) %>%
+  rowwise() %>%
+  mutate(gene.grp = gene.lkps$gene.to.grp[[gene]]) %>%
+  ungroup() %>%
+  with(setNames(gene.grp, marker.id))
+  
+rv.mtx <- geno.mtx[,match(names(rv.gene.marks), colnames(geno.mtx))]
+gene.rv.events <- alt.sums.by.var(rv.mtx, rv.gene.marks)
+
+events.df <- as.data.frame(as.matrix(gene.rv.events > 0))
+
+# a stands for ancestry
+a.rv.prs.df <- bind_cols(
+    select(rv.prs.df, sample.id, all_of(names(cohorts))),
+    events.df[match(rv.prs.df$sample.id, rownames(events.df)),]
+  ) %>%
+    inner_join(prs, by = 'sample.id') %>%
+    select(sample.id, everything()) %>%
+    as_tibble()
+
+
+a.cohort.dfs <- purrr::imap(cohorts, function(cohort, cohort.name) {
+  a.rv.prs.df[
+    match(names(cohort$labels), a.rv.prs.df$sample.id),
+    c('sample.id', cohort.name, cohort$gene.grp, cohort$prs)
+  ] %>%
+    magrittr::set_colnames(c('sample.id', 'case', 'rv', 'prs')) %>%
+    left_join(select(cohort.meta, sample.id, age, sex), by = 'sample.id') %>%
+    mutate(sex = as.logical(ifelse(sex == 'F', 0, 1)))
+})
+
+get.pc.cols <- function(n.pcs) {
+  paste0('pc.', seq(n.pcs))
+}
+
+get.pcs.df <- function(n.pcs) {
+  cohort.meta %>%
+    select(sample.id, all_of(get.pc.cols(n.pcs))) %>%
+    filter(
+      if_any(
+        .cols = all_of(get.pc.cols(n.pcs)),
+        .fns = ~ !is.na(.x),
+      )
+    )
+}
+```
+
+## Ancestry k Nearest Neighbors analysis
+
+The causal collider effect is shown
+when controlling for ancestry.
+
+Ancestry is controlled for by observing the causal collider effect between
+all cases and the (k=2) closest controls in the ancestry PCA space.
+
+A permutation z-statistic is calculated under G
+(the response variable in the reverse model).
+
+A tSNE projection of the PCA space is used to visualize the procedure.
+
+Note: in tSNE space, observations may appear more distant than they really are
+and are shown purely as an intuitive aid.
+
+```{r knn, cache=T}
+# helper function to find nearest neighbors ####
+pos.neg.knn <- function(a.distances, k, rv) {
+  pos.idx <- which(rv)
+  neg.idx <- which(!rv)
+  
+  distances::nearest_neighbor_search(
+    distances = a.distances,
+    k = k,
+    query_indices = pos.idx,
+    search_indices = neg.idx
+  )
+}
+
+calc.a.dist <- function(a.mat, weights) {
+  # calculate distances in confounder space ####
+  # pcs.mat <- as.matrix(select(rv.pcs.df, starts_with('pc')))
+  norm.weights <- weights / sum(weights)
+  distances::distances(a.mat, weights=norm.weights)
+}
+
+# saveRDS(knn.results, file.path(OUT_DIR, 'knn.results.rds'))
+  
+process.knn.results <- function(knn.results) {
+  knn.results %>%
+    purrr::map(function(results) {
+      # helper function to create tSNE plots
+      make.tsne.plots <- function(tsne, knn, rv.pcs.df, x.lim = c(-30, 30), y.lim = c(-30, 30), min.alpha = 0.25) {
+        tsne.df <- cbind(
+          rv.pcs.df[,c('sample.id', 'rv')],
+          data.frame(tSNE.1 = tsne$Y[,1], tSNE.2 = tsne$Y[,2])
+        ) %>%
+          mutate(rv = factor(ifelse(rv, 'RV+', 'RV-'), levels = c('RV-', 'RV+')))
+        
+        knn.connections.df <- do.call(
+          rbind,
+          apply(knn, 1, function(row) {
+            x.idx <- as.integer(colnames(knn))
+            y.idx <- row
+            data.frame(
+              from = tsne.df$sample.id[x.idx],
+              to = tsne.df$sample.id[y.idx],
+              from.x = tsne.df$tSNE.1[x.idx],
+              to.x = tsne.df$tSNE.1[y.idx],
+              from.y = tsne.df$tSNE.2[x.idx],
+              to.y = tsne.df$tSNE.2[y.idx]
+            )
+          })
+        ) %>%
+          filter(
+            from.x > x.lim[1] & from.x < x.lim[2] & to.x > x.lim[1] & to.x < x.lim[2]
+            & from.y > y.lim[1] & from.y < y.lim[2] & to.y > y.lim[1] & to.y < y.lim[2]
+          )
+        
+        full.plot <- tsne.df %>%
+          arrange(rv) %>%
+          ggplot(aes(x = tSNE.1, y = tSNE.2, color = rv, alpha = rv, size = rv)) +
+          geom_point() +
+          scale_color_manual(values = c('RV+' = "#f42e3d", 'RV-' = "black")) +
+          scale_size_manual(values = c('RV+' = 1/4, 'RV-' = 1/12)) +
+          scale_alpha_manual(values = c('RV+' = 1.0, 'RV-' = 1)) +
+          labs(x = "tSNE 1", y = "tSNE 2")
+        
+        knn.plot <- tsne.df %>%
+          ggplot() +
+          geom_segment(
+            data = knn.connections.df,
+            aes(x = from.x, y = from.y, xend = to.x, yend = to.y),
+            linetype = 'dashed',
+            linewidth = 0.35
+          ) +
+          geom_point(
+            data = tsne.df %>%
+              filter(sample.id %in% c(knn.connections.df$from, knn.connections.df$to)) %>%
+              filter(`tSNE.1` > x.lim[1] & `tSNE.1` < x.lim[2] & `tSNE.2` > y.lim[1] & `tSNE.2` < y.lim[2]) %>%
+              arrange(rv),
+            aes(x = tSNE.1, y = tSNE.2, color = rv),
+            size = 1.2
+          ) +
+          scale_color_manual(values = c('RV+' = "#f42e3d", 'RV-' = "black")) +
+          xlim(x.lim) +
+          ylim(y.lim) +
+          labs(x = "", y = "")
+          
+          list(full.plot, knn.plot)
+      }
+      
+      # helper function to create histogram plot
+      plot.hist.w.vline <- function(distances, mean.diff, perm.sdsm, q.05) {
+        data.frame(x = perm.sdsm) %>%
+          ggplot(aes(x = x)) +
+          geom_histogram(
+            aes(y = ..density.., fill = x < q.05),
+            bins = 15,
+            fill = 'gray',
+            color = 'black',
+            alpha = 0.7,
+            position = "identity"
+          ) +
+          scale_x_continuous(expand = c(0,0)) +
+          scale_y_continuous(expand = c(0,0)) +
+          geom_vline(
+            data = data.frame(x = q.05, type = "q.05_quant"),
+            aes(xintercept = x, color = type),
+            linetype = "dashed",
+            linewidth = 0.80
+          ) +
+          geom_vline(
+            data = data.frame(x = mean.diff, type = "mean.prs.diff"),
+            aes(xintercept = x, color = type),
+            linetype = "dashed",
+            linewidth = 0.80
+          ) +
+          scale_color_manual(
+            values = c("q.05_quant" = "black", "mean.prs.diff" = "#f42e3d"),
+            name = NULL,
+           labels = c(
+            "q.05_quant" = stringr::str_wrap("0.05 permutation quantile", width = 16),
+            "mean.prs.diff" = expression("Mean PRS Diff RV"^"+"*" - RV"^"-")
+          )
+          ) +
+          labs(
+            x = "Mean PRS Diff",
+            y = ""
+          )
+      }
+      
+      # extract objects from results
+      rv.pcs.df <- results$rv.pcs.df
+      distances <- results$distances
+      knn <- results$knn
+      tsne <- results$tsne
+      mean.diff <- results$perm.res$mean.diff
+      perm.sdsm <- results$perm.res$perm.sdsm
+      
+      # create tSNE plots
+      tsne.plots <- make.tsne.plots(tsne, knn, rv.pcs.df, x.lim = x.lim, y.lim = y.lim)
+      
+      # perform permutation t.test
+      sdsm.mean <- mean(perm.sdsm)
+      sdsm.sd <- sd(perm.sdsm)
+      
+      z.score <- (mean.diff - sdsm.mean) / sdsm.sd
+      p.val <- pnorm(z.score)
+    
+      q.05 <- quantile(perm.sdsm, 0.05)
+      
+      hist.plot <- plot.hist.w.vline(distances, mean.diff, perm.sdsm, q.05)
+      
+      list(
+        full.tsne = tsne.plots[[1]],
+        zoom.tsne = tsne.plots[[2]],
+        hist = hist.plot,
+        results = list(
+          sdsm.mean = sdsm.mean,
+          sdsm.sd = sdsm.sd,
+          mean.diff = mean.diff,
+          q.05 = q.05,
+          z.score = z.score,
+          p.val = p.val
+        )
+      )
+  })
+}
+
+# ATT = mean(pos) - mean(net) queried by pos
+# ATC = mean(pos) - mean(net) queried by neg
+# ATE = w * ATT + (1-w) * ATC
+
+# set parameters ####
+
+n = 1000 # the number of permutations when creating permutation distributions
+k = 2 # number of RV- neighborsto use when calculating PRS delta
+r = 0.637 # the "decay" factor to simulate decreasing eigenvalues of PCs
+
+tsne.seed = 5 # RNG seed for tSNE
+x.lim <- c(-15, 15) # x limits for tSNE zoom plot
+y.lim <- c(-15, 15) # y limits for tSNE zoom plot
+
+# extract first 5 PCs to calculate nearest neighbors ####
+
+knn.pcs <- as.data.frame(get.pcs.df(5))
+weights <- exp(-r * 0:(5 - 1))
+
+# iterate over cohorts and perform analysis #####
+knn.results <- a.cohort.dfs %>%
+  purrr::map(function(cohort.df) {
+    # rv/prs dataframe w/ PCs ####
+    cohort.df %>%
+      filter(case) %>%
+      select(sample.id, rv, prs, age) %>%
+      inner_join(knn.pcs, by = 'sample.id')
+  }) %>%
+  purrr::map(function(rv.pcs.df) {
+    # helper function to calculate test statistic ####
+    knn.collider.prs.diff.mean <- function(knn) {
+      prs.diffs <- sapply(seq(ncol(knn)), function(idx) {
+        q.idx <- as.integer(colnames(knn)[idx])
+        h.idx <- knn[,idx]
+        rv.pcs.df[q.idx,]$prs - mean(rv.pcs.df[h.idx,]$prs)
+      })
+      
+      mean(prs.diffs)
+    }
+    
+    pc.df <- as.data.frame(select(rv.pcs.df, starts_with('pc')))
+    pc.mat <- as.matrix(pc.df)
+    rownames(pc.mat) <- rv.pcs.df$sample.id
+    
+    distances <- calc.a.dist(pc.mat, weights)
+    
+    # calculate the observed statistic ####
+    prs.diff <- knn.collider.prs.diff.mean(
+      pos.neg.knn(distances, k, rv.pcs.df$rv)
+    )
+    
+    # create permutation distribution of test statistic ####
+    prs.diff.sdsm <- sapply(seq(n), function(x) {
+      knn.collider.prs.diff.mean(pos.neg.knn(distances, k, sample(rv.pcs.df$rv)))
+    })
+    
+    # store permutation results ####
+    perm.res <- list(
+      mean.diff = prs.diff,
+      perm.sdsm = prs.diff.sdsm
+    )
+    
+    # calculate 5 nearest neighbors and create tSNE (for vizualiation) ####
+    set.seed(tsne.seed)
+    knn <- pos.neg.knn(distances, k = 5, rv.pcs.df$rv)
+    tsne <- Rtsne(as.matrix(as.dist(distances)), is_distance = T)
+    
+    list(
+      rv.pcs.df = rv.pcs.df,
+      distances = distances,
+      knn = knn,
+      tsne = tsne,
+      perm.res = perm.res
+    )
+  })
+
+a.cohort.dfs %>%
+  purrr::map(~{
+    .x <- filter(.x, case)
+    .x$age <- scale(.x$age)
+    .x$prs.res <- lm(prs ~ age, data = .x)$residuals
+    
+    .x %>%
+      ggplot(aes(x = prs, y = prs.res)) +
+      geom_point() +
+      geom_smooth(method = 'lm')
+  })
+
+# iterate over cohorts and perform analysis #####
+knn.results.w.age <- a.cohort.dfs %>%
+  purrr::map(function(cohort.df) {
+    # rv/prs dataframe w/ PCs ####
+    cohort.df %>%
+      filter(case) %>%
+      select(sample.id, rv, prs, age) %>%
+      inner_join(knn.pcs, by = 'sample.id')
+  }) %>%
+  purrr::map(function(rv.pcs.df) {
+    # helper function to calculate test statistic ####
+    knn.collider.prs.diff.mean <- function(knn) {
+      prs.diffs <- sapply(seq(ncol(knn)), function(idx) {
+        q.idx <- as.integer(colnames(knn)[idx])
+        h.idx <- knn[,idx]
+        rv.pcs.df[q.idx,]$prs - mean(rv.pcs.df[h.idx,]$prs)
+      })
+      
+      mean(prs.diffs)
+    }
+    
+    rv.pcs.df$prs <- lm(prs ~ age, data = rv.pcs.df)$residuals
+    
+    # a.df <- as.data.frame(select(rv.pcs.df, age, starts_with('pc')))
+    a.df <- as.data.frame(select(rv.pcs.df, starts_with('pc')))
+    a.mat <- as.matrix(a.df)
+    rownames(a.mat) <- rv.pcs.df$sample.id
+    
+    # distances <- calc.a.dist(a.mat, c(2, weights))
+    distances <- calc.a.dist(a.mat, weights)
+    
+    # calculate the observed statistic ####
+    prs.diff <- knn.collider.prs.diff.mean(
+      pos.neg.knn(distances, k, rv.pcs.df$rv)
+    )
+    
+    # create permutation distribution of test statistic ####
+    prs.diff.sdsm <- sapply(seq(n), function(x) {
+      knn.collider.prs.diff.mean(pos.neg.knn(distances, k, sample(rv.pcs.df$rv)))
+    })
+    
+    # store permutation results ####
+    perm.res <- list(
+      mean.diff = prs.diff,
+      perm.sdsm = prs.diff.sdsm
+    )
+    
+    # calculate 5 nearest neighbors and create tSNE (for vizualiation) ####
+    set.seed(tsne.seed)
+    knn <- pos.neg.knn(distances, k = 5, rv.pcs.df$rv)
+    tsne <- Rtsne(as.matrix(as.dist(distances)), is_distance = T)
+    
+    list(
+      rv.pcs.df = rv.pcs.df,
+      distances = distances,
+      knn = knn,
+      tsne = tsne,
+      perm.res = perm.res
+    )
+  })
+
+knn.plots <- process.knn.results(knn.results)
+knn.plots.w.age <- process.knn.results(knn.results.w.age)
+
+# save results ####
+
+# saveRDS(modifyList(knn.results, knn.plots), file = file.path(OUT_DIR, 'fig4.rds'))
+
+{
+  base.fig4.theme <- theme_bw(base_family = "Arial") +
+    theme(
+      panel.grid = element_blank(),
+      axis.title = element_text(face = 'bold', size = 8),
+      axis.text = element_text(face = 'bold', size = 7),
+      strip.text = element_text(face = 'bold', size = 8),
+      legend.title = element_text(size = 8),
+      # legend.position = 'bottom',
+      # legend.box = 'horizontal',
+      legend.text = element_text(size = 7)
+    )
+  
+  knn.hist.theme <- base.fig4.theme
+  
+  compose.tsne <- function(full, zoom) {
+  
+    full.tsne.theme <- base.fig4.theme +
+      theme(
+        panel.border = element_blank(),
+        axis.line = element_line(),
+        legend.position = "none"
+      )
+    
+    zoom.tsne.theme <- base.fig4.theme +
+      theme(
+        panel.border = element_rect(color = "blue", linewidth = 0.80),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        legend.position = "none",
+      )
+    
+    full.tsne <- full +
+      full.tsne.theme +
+      guides(color = "none", size = "none", alpha = "none")
+    
+     zoom.tsne <- zoom +
+       zoom.tsne.theme +
+       guides(color = "none", size = "none", alpha = "none")
+     
+     (full.tsne & theme(plot.margin = margin())) +
+     (zoom.tsne & theme(plot.margin = margin()))
+  }
+  
+  compose.row <- function(full, zoom, hist) {
+    (
+        compose.tsne(full, zoom) |
+        (hist + knn.hist.theme) |
+          plot_spacer()
+      ) +
+      plot_layout(widths = c(2, 1, 0.5))
+  }
+  
+  (
+    compose.row(
+      knn.plots$HC190$full.tsne, knn.plots$HC190$zoom.tsne, knn.plots$HC190$hist
+    ) /
+    compose.row(
+      knn.plots$BC$full.tsne, knn.plots$BC$zoom.tsne, knn.plots$BC$hist
+    ) /
+    compose.row(
+      knn.plots$PD$full.tsne, knn.plots$PD$zoom.tsne, knn.plots$PD$hist
+    )
+  ) +
+    guide_area() +
+    plot_layout(guides = "collect", heights = c(4, 4, 4, 1)) &
+    theme(
+      legend.position = "bottom",
+      legend.text = element_text(size = 8),
+      legend.key.width = unit(1, 'cm'),
+      legend.key.size = unit(0.9, 'cm'),
+    )
+  } %>%
+  save.plot('fig4', root.dir = PLOTS_DIR, sub.dir = 'composed', w = 6.5, h = 5)
+
+{
+  base.fig4.theme <- theme_bw(base_family = "Arial") +
+    theme(
+      panel.grid = element_blank(),
+      axis.title = element_text(face = 'bold', size = 8),
+      axis.text = element_text(face = 'bold', size = 7),
+      strip.text = element_text(face = 'bold', size = 8),
+      legend.title = element_text(size = 8),
+      # legend.position = 'bottom',
+      # legend.box = 'horizontal',
+      legend.text = element_text(size = 7)
+    )
+  
+  knn.hist.theme <- base.fig4.theme
+  
+  compose.tsne <- function(full, zoom) {
+  
+    full.tsne.theme <- base.fig4.theme +
+      theme(
+        panel.border = element_blank(),
+        axis.line = element_line(),
+        legend.position = "none"
+      )
+    
+    zoom.tsne.theme <- base.fig4.theme +
+      theme(
+        panel.border = element_rect(color = "blue", linewidth = 0.80),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        legend.position = "none",
+      )
+    
+    full.tsne <- full +
+      full.tsne.theme +
+      guides(color = "none", size = "none", alpha = "none")
+    
+     zoom.tsne <- zoom +
+       zoom.tsne.theme +
+       guides(color = "none", size = "none", alpha = "none")
+     
+     (full.tsne & theme(plot.margin = margin())) +
+     (zoom.tsne & theme(plot.margin = margin()))
+  }
+  
+  compose.row <- function(full, zoom, hist) {
+    (
+        compose.tsne(full, zoom) |
+        (hist + knn.hist.theme) |
+          plot_spacer()
+      ) +
+      plot_layout(widths = c(2, 1, 0.5))
+  }
+  
+  (
+    compose.row(
+      knn.plots.w.age$HC190$full.tsne, knn.plots.w.age$HC190$zoom.tsne, knn.plots.w.age$HC190$hist
+    ) /
+    compose.row(
+      knn.plots.w.age$BC$full.tsne, knn.plots.w.age$BC$zoom.tsne, knn.plots.w.age$BC$hist
+    ) /
+    compose.row(
+      knn.plots.w.age$PD$full.tsne, knn.plots.w.age$PD$zoom.tsne, knn.plots.w.age$PD$hist
+    )
+  ) +
+    guide_area() +
+    plot_layout(guides = "collect", heights = c(4, 4, 4, 1)) &
+    theme(
+      legend.position = "bottom",
+      legend.text = element_text(size = 8),
+      legend.key.width = unit(1, 'cm'),
+      legend.key.size = unit(0.9, 'cm'),
+    )
+  } %>%
+  save.plot('fig4.w.age', root.dir = PLOTS_DIR, sub.dir = 'composed', w = 6.5, h = 5)
+```
+
+## Ancestry Propensity Control Methods
+
+### Helper Functions
+
+```{r}
+overlap.measures <- function(x) {
+  p1 <- x[x$rv,]$p
+  p0 <- x[!x$rv,]$p
+  
+  # SMD < 0.1: good overlap
+  # SMD > 0.25: poor overlap
+  smd <- (mean(p1) - mean(p0)) / sqrt(mean(c(var(p1), var(p0))))
+  
+  d1 <- density(p1)
+  d0 <- density(p0)
+  
+  # closer to 1: good overlap
+  # closer to 0: bad overlap
+  idx <- sum(pmin(d1$y, d0$y)) / sum(d1$y)
+  
+  list(
+    smd = smd,
+    idx = idx
+  )
+}
+
+reg.p <- function(p, t = 4, epsilon = 0.001) {
+  expit <- function(z) 1 / (1 + exp(-z))
+  logit <- function(x) log(x / (1 - x))
+  pmin(pmax(expit(logit(p) / t), epsilon), 1 - epsilon)
+}
+
+norm.p <- function(p) {
+  p / sum(p)
+}
+
+overlap.plt <- function(x, facet=F) {
+  means <- x %>%
+    group_by(rv) %>%
+    summarize(m = mean(p))
+  x %>%
+    ggplot(aes(x = p, fill = rv)) +
+    geom_density(alpha = 0.3, position = 'identity') +
+    geom_rug(aes(color = rv)) +
+    geom_vline(aes(xintercept = m, color = rv), data = means) +
+    scale_x_continuous(limits = c(0, 1))
+}
+
+prop.strat <- function(x, n.bins) {
+  x %>%
+    mutate(
+      p.bin = ntile(p, n.bins)
+    ) %>%
+    group_by(rv, p.bin) %>%
+    summarise(mean.prs = mean(prs)) %>%
+    ungroup() %>%
+    pivot_wider(id_cols = 'p.bin', names_from = 'rv', values_from = 'mean.prs') %>%
+    mutate(diff = `TRUE` - `FALSE`) %>%
+    summarize(mean.diff = mean(diff))
+  
+  # x %>%
+  #   group_by(rv) %>%
+  #   summarize(m = mean(prs)) %>%
+  #   ungroup() %>%
+  #   summarize(m[2] - m[1])
+    
+}
+
+prop.ctrl.regr <- function(x, dbl.cov = c()) {
+  x$rv <- as.numeric(x$rv)
+  
+  base <- lm(
+    prs ~ rv,
+    data = x
+  )
+  
+  prop.ctrl <- lm(
+    prs ~ rv + p,
+    data = x
+  )
+  
+  x$ipw <- ifelse(x$rv, x$p, (1 - x$p))
+  
+  ipw <- lm(
+    prs ~ rv,
+    weights = 1 / x$ipw,
+    data = x
+  )
+  
+  dbl.data <- select(x, prs, rv, all_of(dbl.cov))
+  dbl <- lm(
+    prs ~ .,
+    weights = 1 / x$ipw,
+    data = dbl.data
+  )
+  
+  format.reg.table <- function(model, method.name) {
+    conf.int.tbl <- as.data.frame(confint(model, names(model$coefficients))) %>%
+      magrittr::set_colnames(c('int.95.low', 'int.95.high')) %>%
+      mutate(term = rownames(.))
+    broom::tidy(model) %>%
+      mutate(method = method.name) %>%
+      left_join(conf.int.tbl, by = 'term') %>%
+      select(method, term, int.95.low, estimate, int.95.high, p.value)
+  }
+  
+  bind_rows(
+    format.reg.table(base, 'prs ~ rv'),
+    format.reg.table(prop.ctrl, 'prs ~ rv + p'),
+    format.reg.table(ipw, 'prs ~ rv (ipw)'),
+    format.reg.table(dbl, 'prs ~ rv (ipw) + .'),
+  )
+}
+
+dbl.robust.estimator <- function(y, t, a, e) {
+  # Outcome (Y) = X (prs)
+  # Treatment (T) = G (rv)
+  # Covariates (X) = A (age, PCs, etc.)
+  # e(X) = regularized propensity reg(P(G|A))
+  
+  m.model <- lm(y ~ t + ., data = data.frame(y = y, t = t, a))
+  m1 <- predict(m.model, newdata = data.frame(t = 1, a), type = "response")
+  m0 <- predict(m.model, newdata = data.frame(t = 0, a), type = "response")
+  
+  # estimator: tao (t)
+  eY1 <- mean(y * (t / e) - m1 * (t - e) / e)
+  eY0 <- mean(y * (1 - t) / (1 - e) + m0 * (t - e) / (1 - e))
+  rd <- eY1 - eY0
+  
+  list(
+    eY0 = eY0,
+    eY1 = eY1,
+    rd = rd
+  )
+}
+```
+
+### Calculate Propensity Scores
+
+#### Base Random Forests
+
+Propensities are calculated using random forests over the first 15 ancestry PCs from UKB.
+Random forests "importance" metrics are plotted as supplemental information.
+
+```{r random_forest_propensity, eval=F, include=F}
+# set parameters ####
+# n.trees <- 1000 # number of trees in forest
+# n.pcs <- 15 # number of principal components to use as features
+
+n.trees <- 10 # number of trees in forest
+rfm.prop <- function(x, y, ntree) {
+  # define helper function to create predictor importance plots
+  plot_imp <- function(imp, measure) {
+    # importance(my.rfm) returns multiple importance measure
+    # we are primarily concerned with MeanDecreaseAccuracy and MeanDecreaseGini
+    # they quantify the average decrease in two different measures of predictor
+    # performance when predictors are REMOVED - so higher decrease is better
+    imp$predictor <- rownames(imp)
+    
+    imp$measure <- imp[[measure]]
+    # we make predictor factor with levels sorted to make ggplot2 plot them in correct order
+    imp$predictor <- factor(imp$predictor, levels = imp$predictor[order(imp$measure)])
+    
+    imp %>%
+      select(predictor, measure) %>%
+      arrange(desc(predictor)) %>%
+      ggplot(aes(y = predictor, x = measure)) +
+      geom_hline(aes(yintercept=predictor), linetype = 'dotted', linewidth = 0.5, alpha = 0.33) +
+      geom_point(shape = 21, size = 5, fill = 'white') +
+      theme_classic() +
+      theme(
+        axis.ticks.y = element_blank(),
+        axis.line.x = element_line(),
+        legend.position = "none",
+      )
+  }
+  
+  rfm <- randomForest::randomForest(
+    x,
+    y,
+    ntree = ntree,
+    importance = T,
+  )
+  
+  # store predictor importance metrics
+  imp <- as.data.frame(randomForest::importance(rfm))
+  
+  # set propensity score from model prediction
+  p <- predict(rfm, x, type = "prob")[,'TRUE']
+  
+  rownames(imp) <- gsub('pc.', 'PC', rownames(imp))
+  # make importance accuracy plot
+  imp.acc.plt <- plot_imp(imp, 'MeanDecreaseAccuracy') +
+      labs(
+        y = "",
+        x = ""
+      )
+  
+  # make importance gini purity plot
+  imp.gini.plt <- plot_imp(imp, 'MeanDecreaseGini') +
+      labs(
+        y = "",
+        x = ""
+      )
+  
+  list(
+    p = p,
+    imp = imp,
+    rfm = rfm,
+    imp.acc.plt = imp.acc.plt,
+    imp.gini.plt= imp.gini.plt
+  )
+}
+
+a.rfm.prop <- purrr::map(a.cohort.dfs, function(cohort.df) {
+  n.pcs <- 5
+  pc.cols <- get.pc.cols(n.pcs)
+  pcs.df <- get.pcs.df(n.pcs)
+  # join cohort data to ancestry principal components (there are 40 in total)
+  x <- inner_join(
+    cohort.df,
+    pcs.df,
+    by = 'sample.id'
+  ) %>%
+    filter(case)
+  
+  # P(Y | A)
+  prop <- rfm.prop(
+    x = x[,pc.cols,drop=F],
+    # x = x[,c('age', pc.cols),drop=F],
+    y = as.factor(x$rv),
+    ntree = n.trees
+  )
+  
+  x$p <- reg.p(prop$p, t = 4, epsilon = 0.001)
+  
+  x
+  
+  #   save.plot(imp.acc.plt, paste(cohort.name, 'imp.acc', sep='.'), w = 4.5, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'ancestry.balancing/inverse.probability.weighting'),
+  #   save.plot(imp.gini.plt, paste(cohort.name, 'imp.gini', sep='.'), w = 4.5, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'ancestry.balancing/inverse.probability.weighting')
+})
+
+
+purrr::map(a.rfm.prop, function(prop) {
+  prop %>%
+    mutate(p.bin = ntile(p, 5)) %>%
+    overlap.plt(facet=F)
+})
+
+purrr::map(a.rfm.prop, function(prop) {
+  as.data.frame(overlap.measures(prop))
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+purrr::map(a.rfm.prop, function(prop) {
+  prop %>%
+    prop.strat(5)
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+purrr::map(a.rfm.prop, function(prop) {
+  prop %>%
+    prop.ctrl.regr()
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+purrr::map(a.rfm.prop, function(prop) {
+  # x <- x %>%
+  #   mutate(
+  #     y = prs,
+  #     t = as.numeric(rv),
+  #     e = p,
+  #     a = age,
+  #   ) %>%
+  #   select(y, t, e, a, starts_with('pc.'))
+  
+  dbl.robust.estimator(
+    y = prop$prs,
+    t = as.numeric(prop$rv),
+    e = prop$p,
+    # a = select(prop, age, starts_with('pc.'))
+    a = select(prop, starts_with('pc.'))
+  )
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+```
+
+### Cross Validated Concensus Random Forests
+
+```{r cv_rfm_propensity}
+library(rsample)
+n.outer <- 1
+n.folds <- 1
+n.pcs <- 5
+n.trees <- 16
+
+cv.rfm.prop <- purrr::imap(a.cohort.dfs, function(cohort.df, cohort.name) {
+  x <- inner_join(
+    cohort.df,
+    get.pcs.df(n.pcs = n.pcs),
+    by = 'sample.id'
+  ) %>%
+    filter(case)
+  
+  purrr::map(seq(n.outer), function(i) {
+    folds <- if (n.folds > 1) {
+      vfold_cv(
+        data = x,
+        v = n.folds,
+        strata = "case"
+      ) %>%
+        pull(splits) %>%
+        lapply(function(split) {
+          split$in_id
+        })
+    } else {
+      list(seq(1, nrow(x)))
+    }
+    
+    rfm.propensities <- purrr::imap(folds, function(fold, j) {
+      train.df <- x[fold,]
+      
+      test.df <- if (n.folds > 1) {
+        test.df <- x[-fold,]
+        if (sum(train.df$rv) == 0) {
+          cat('no train cases\n')
+          stop()
+        }
+        
+        if (sum(test.df$rv) == 0) {
+          cat('no test cases\n')
+          stop()
+        }
+        test.df
+      } else {
+        train.df
+      }
+      
+      # train.data <- select(train.df, rv, starts_with('pc.'))
+      # test.data <- select(test.df, starts_with('pc.'))
+      
+      # train.data <- select(train.df, rv, age, starts_with('pc.'))
+      # test.data <- select(test.df, age, starts_with('pc.'))
+      
+      train.data <- select(train.df, rv, age, sex, starts_with('pc.'))
+      test.data <- select(test.df, age, sex, starts_with('pc.'))
+      
+      rfm <- ranger::ranger(
+        formula = rv ~ .,
+        data = train.data,
+        probability = T,
+        num.trees = n.trees,
+        # split.select.weights = pc.decay
+        # importance = "impurity"
+      )
+      
+      data.frame(
+        sample.id = test.df$sample.id,
+        p = predict(rfm, test.data)$predictions[,2]
+      )
+    }, .progress = paste0(cohort.name, ' outer:', i)) %>%
+      concat.df.list(key.cols = 'fold') %>%
+      .[match(x$sample.id, .$sample.id),]
+  }) %>%
+    do.call(bind_rows, .) %>%
+    group_by(sample.id) %>%
+    summarize(
+      p = reg.p(mean(p), t = 4, epsilon = 0.001)
+    ) %>%
+    ungroup() %>%
+    left_join(x, by = 'sample.id') %>%
+    select(all_of(names(x)), everything())
+  # x %>%
+  #   left_join(rfm.propensities, by = 'sample.id')
+})
+
+# hist(cv.rfm.prop$HC190$p)
+
+purrr::map(cv.rfm.prop, function(prop) {
+  prop %>%
+    summarize(min = min(p), max = max(p))
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+purrr::imap(cv.rfm.prop, function(prop, cohort.name) {
+  prop %>%
+    # mutate(p = reg.p(p, t = 4)) %>%
+    # mutate(p.bin = ntile(p, 5)) %>%
+    overlap.plt() +
+    labs(title = 'Regularized Propensities by RV Status', subtitle = cohort.name)
+})
+
+purrr::map(cv.rfm.prop, function(prop) {
+  prop %>%
+    # mutate(p = reg.p(p, t = 4)) %>%
+      overlap.measures %>%
+      as.data.frame()
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+purrr::map(cv.rfm.prop, function(prop) {
+  prop %>%
+    prop.strat(5)
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+cv.rfm.prop.ctrl.regr.tbl <- purrr::map(cv.rfm.prop, function(prop) {
+  prop %>%
+    prop.ctrl.regr(dbl.cov = c('age', 'sex', get.pc.cols(n.pcs)))
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+openxlsx::write.xlsx(
+  cv.rfm.prop.ctrl.regr.tbl,
+  file = file.path(OUT_DIR, 'cv.rfm.prop.ctrl.regr.tbl.xlsx'),
+  asTable = T
+)
+
+cv.rfm.prop.ctrl.regr.tbl
+
+purrr::map(cv.rfm.prop, function(prop) {
+    dbl.robust.estimator(
+    y = prop$prs,
+    t = as.numeric(prop$rv),
+    e = prop$p,
+    a = select(prop, age, sex, starts_with('pc.'))
+    # a = select(prop, age, starts_with('pc.'))
+    # a = select(prop, starts_with('pc.'))
+  )
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+```
+
+#### Inverse Probability Weighting
+
+A lateral method for ancestry balancing is performed using inverse probability weighting.
+A permutation z-statistic is calculated under G; the statistic is the difference
+in weighted PRS sums between RV+ and RV- cases.
+
+```{r inverse_probability_weighting, cache=T}
+# set parameters ####
+n.perms <- 1000 # number of permutations for permutation testing
+
+# ancestry - inverse probability weighting results
+a.cv.rfm.ipw <- purrr::map(cv.rfm.prop, function(x) {
+  # calculate permutation distribution by permuting PRS and re-weighting
+  p.dist <- sapply(1:n.perms, function(.) {
+    # permute prs and weight by propensity score (or 1 - score if event == F)
+    prs.weighted <- sample(x$prs) / ifelse(x$rv == T, x$p, (1 - x$p))
+    # calculate test statistic - the normalized difference of weighted PRS b/w RV+ and RV- samples
+    (sum(prs.weighted[which(x$rv==T)]) - sum(prs.weighted[which(x$rv==F)])) / nrow(x)
+  })
+  
+  # calculate observed test statistic
+  x$prs.weighted <- x$prs / ifelse(x$rv == T, x$p, (1 - x$p))
+  t <- (sum(x[x$rv==T,]$prs.weighted) - sum(x[x$rv==F,]$prs.weighted)) / nrow(x)
+  
+  ipw.perm.test <- perm.test(t, p.dist)
+  
+  # repeat w/ non-weighted test
+  p.dist.no.weight <- sapply(1:n.perms, function(.) {
+    # permute prs and weight by propensity score (or 1 - score if event == F)
+    prs.weighted <- sample(x$prs)
+    # calculate test statistic - the normalized difference of weighted PRS b/w RV+ and RV- samples
+    (sum(prs.weighted[which(x$rv==T)]) - sum(prs.weighted[which(x$rv==F)])) / nrow(x)
+  })
+  
+  x$prs.weighted <- x$prs
+  t.no.weight <- (sum(x[x$rv==T,]$prs.weighted) - sum(x[x$rv==F,]$prs.weighted)) / nrow(x)
+  
+  no.weight.perm.test <- perm.test(t.no.weight, p.dist.no.weight)
+  
+  list(
+    ipw.perm.test = ipw.perm.test,
+    no.weight.perm.test = no.weight.perm.test
+  )
+})
+
+a.cv.rfm.ipw.hist <- purrr::imap(a.cv.rfm.ipw, function(result, cohort.name) {
+  ipw <- result$ipw.perm.test
+  no.weight <- result$no.weight.perm.test
+  
+  p.val.stars <- p.val.stars(ipw$p.val)
+  stars.y.pos = max(density(ipw$p.dist.std)$y) * 0.75
+  stars.x.pos = max(density(ipw$p.dist.std)$x) * 0.85
+  
+  # plot permutation test histogram w/ line at observed statistic
+  data.frame(x = ipw$p.dist.std) %>%
+    ggplot(aes(x = x)) +
+    geom_histogram(
+      aes(y = ..density..),
+      bins = 15,
+      fill = 'gray',
+      color = 'black',
+      alpha = 0.7,
+      position = "identity"
+    ) +
+    geom_vline(xintercept = ipw$z, linetype = "dashed", color = "red", linewidth = 1.5) +
+    geom_vline(xintercept = no.weight$z, linetype = "dashed", color = "blue", linewidth = 1) +
+    geom_vline(xintercept = quantile(ipw$p.dist.std, 0.05), linetype = "dashed", color = "black", linewidth = 1.5) + 
+    geom_text(label = p.val.stars, y = stars.y.pos, x = stars.x.pos, vjust = 1, size = 6, show.legend=F) +
+    scale_x_continuous(expand = c(0,0)) +
+    scale_y_continuous(expand = c(0,0)) +
+    theme_classic() +
+    theme(
+      axis.line.y = element_blank(),
+      axis.text.y = element_text(size = 12, face = "bold"),
+      axis.ticks.y = element_line(size = 2),
+      axis.text.x = element_text(size = 12, face = "bold"),
+      axis.ticks.x = element_line(size = 2),
+      legend.position = "none",
+      axis.title = element_text(size = 30, face = "bold")
+    ) +
+    labs(
+      x = "",
+      y = "",
+      title = cohort.name
+    )
+  
+  # save.plot(hist.plt, paste(cohort.name, 'ipw.hist', sep='.'), w = 4.5 * 2, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'ancestry.balancing/cv.rfm.propensity')
+})
+
+a.cv.rfm.ipw.hist
+
+# composed plot
+
+composed.theme <- theme(
+  axis.title.y = element_text(size = 12, face = "bold"),
+  axis.title.x = element_text(size = 11, face = "bold"),
+  axis.text.y = element_text(size = 12, face = "bold"),
+  axis.text.x = element_text(size = 12, face = "bold"),
+  axis.ticks.x = element_line(linewidth = 2),
+)
+
+# row 1 (HC190)
+
+a.ipw.plts <- lapply(names(cohorts), function(cohort.name) {
+  hist.plt <- a.ipw.results[[cohort.name]]$hist.plt
+  imp.acc.plt <- a.propensity[[cohort.name]]$imp.acc.plt
+  imp.gini.plt <- a.propensity[[cohort.name]]$imp.gini.plt
+  list(
+    grid::textGrob(cohort.name, rot = 90, gp = grid::gpar(fontface = 'bold')),
+    hist.plt,
+    imp.acc.plt,
+    imp.gini.plt
+  )
+})%>%
+  unlist(recursive = F)
+
+a.ipw.plts[[10]] <- a.ipw.plts[[10]] + labs(x = "Weighted PRS Delta")
+a.ipw.plts[[11]] <- a.ipw.plts[[11]] + labs(x = "Importance (Accuracy)")
+a.ipw.plts[[12]] <- a.ipw.plts[[12]] + labs(x = "Importance (Gini)")
+
+a.ipw.composed.plt <- a.ipw.plts %>%
+  wrap_plots(
+    nrow = 3,
+    byrow = T,
+    widths = c(1, 6, 4, 4)
+  ) %>%
+  {. & composed.theme}
+
+a.ipw.composed.plt
+
+save.plot(a.ipw.composed.plt, paste('ancestry.ipw', sep='.'), w = 6 * 2, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'ancestry.balancing/cv.rfm.propensity')
+
+purrr::map(a.ipw.results, ~.$p.val)
+saveRDS(a.ipw.results, file = file.path(OUT_DIR, 'a.ipw.cv.results.rds'))
+```
+
+
+#### GLM Propensity
+
+```{r glm_propensity}
+# library(rsample)
+# n.outer <- 1
+# n.folds <- 1
+n.pcs <- 40
+# n.trees <- 16
+# 
+# r = 0.637 # the "decay" factor to simulate decreasing eigenvalues of PCs
+# pc.decay <- exp(-r * 0:(n.pcs - 1))
+# pc.weights <- pc.decay / sum(pc.decay)
+
+cv.glm.prop <- purrr::imap(a.cohort.dfs, function(cohort.df, cohort.name) {
+  x <- inner_join(
+    cohort.df,
+    get.pcs.df(n.pcs = n.pcs),
+    by = 'sample.id'
+  ) %>%
+    filter(case)
+  
+  model <- glm(rv ~ ., family = binomial(link = 'logit'), data = select(x, rv, starts_with('pc.')))
+  
+  x$p <- predict(model, x, type = "response")
+  x$p <- reg.p(x$p, t = 4, epsilon = 0.001)
+  x
+})
+
+purrr::map(cv.glm.prop, function(prop) {
+  prop %>%
+    summarize(min = min(p), max = max(p))
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+
+purrr::imap(cv.glm.prop, function(prop, cohort.name) {
+  prop %>%
+    # mutate(p = reg.p(p, t = 4)) %>%
+    # mutate(p.bin = ntile(p, 5)) %>%
+    overlap.plt() +
+    labs(title = 'Regularized Propensities by RV Status', subtitle = cohort.name)
+})
+
+purrr::map(cv.glm.prop, function(prop) {
+  prop %>%
+    # mutate(p = reg.p(p, t = 4)) %>%
+      overlap.measures %>%
+      as.data.frame()
+}) %>%
+  concat.df.list(key.cols = 'cohort')
+```
+

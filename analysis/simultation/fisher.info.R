@@ -78,6 +78,9 @@ all.x <- solve(all.info$I1 * all.info$n1 + all.info$I2 * all.info$n2)
 sqrt(G.x[1,1])
 sqrt(all.x[1,1])
 
+sqrt(all.x[1,1]) / sqrt(G.x[1,1])
+sqrt(all.x[2,2]) / sqrt(G.x[2,2])
+
 sqrt(G.x[2,2])
 sqrt(all.x[2,2])
 
@@ -85,3 +88,45 @@ det(G.x)
 det(all.x)
 
 det(G.x) / det(all.x)
+
+
+source('../lrt_equations/equations.logitXG.R')
+list2env(lrt.logitXG.equations, envir = environment())
+
+params <- list(
+  n = 5e5,
+  omega = 0.001,
+  alpha = -2.2,
+  beta = 0.6,
+  gamma = 1,
+  eta = -0.4
+)
+
+sim.result <- f.call(sim, params)
+
+G.info <- f.call(lrt.logitG.equations$fisher.info, modifyList(params, sim.result))
+XG.info <- f.call(lrt.logitXG.equations$fisher.info, modifyList(params, sim.result))
+
+G.x <- solve(G.info$I1 * G.info$n1 + G.info$I2 * G.info$n2)
+XG.x <- solve(XG.info$I1 * XG.info$n1 + XG.info$I2 * XG.info$n2)
+
+det(G.x)
+det(XG.x)
+
+G.x
+XG.x
+
+sqrt(G.x[1,1])
+sqrt(XG.x[1,1])
+
+sqrt(G.x[2,2])
+sqrt(XG.x[2,2])
+
+sim.df.1 <- as_tibble(f.call(sim, modifyList(params, list(omega = 1e-3)))) %>% mutate(omega = 1e-3)
+sim.df.2 <- as_tibble(f.call(sim, modifyList(params, list(omega = 1e-2)))) %>% mutate(omega = 1e-2)
+
+bind_rows(sim.df.1, sim.df.2) %>%
+  mutate(omega = as.factor(omega)) %>%
+  ggplot(aes(x = X, color = omega)) +
+  geom_density() +
+  facet_grid(rows = vars(Y), cols = vars(G))

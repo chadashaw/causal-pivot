@@ -8,9 +8,12 @@
 *.Rproj work/*
 *.Rproj
 *.rds
+*_cache/
+*_files/
 work*
 *.sqlite
 *__pycache__*
 *.tar.gz
 *.html
 *bin/
+analysis/pivot/alzheimers

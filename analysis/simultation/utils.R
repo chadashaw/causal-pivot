@@ -1,7 +1,89 @@
 library(rootSolve)
+library(parallel)
+library(showtext)
+library(sysfonts)
 
-n.cores <- ceiling(detectCores() / 2)
+# font stuff
+font_add(family = "Arial", regular = "Arial.ttf", bold = "Arial_Bold.ttf")
+showtext_auto()
+cowplot::set_null_device("png")
+# end font stuff
+
+expit <- function(logit) {
+  1 / (1 + exp(-logit))
+  # exp(logit) / (1 + exp(logit))
+}
+
+logitY <- function(alpha, beta, gamma, eta, X, G) {
+  alpha + beta * X + gamma * G + eta * X * G
+}
+
+pY <- function(alpha, beta, gamma, eta, X, G) {
+  expit(logitY(alpha, beta, gamma, eta, X, G))
+}
+
+n.cores <- ceiling(parallel::detectCores() / 2)
 n.batch <- 128
+
+# logistic simulator
+sim <- function(
+  n,
+  alpha,
+  beta,
+  gamma,
+  eta,
+  omega
+) {
+  G <- rbinom(n = n, size = 1, prob = omega)
+  
+  X <- rnorm(n = n, mean = 0, sd = 1)
+  
+  GX <- G * X
+  
+  pY <- alpha + beta * X + gamma * G + eta * GX
+  
+  Y <- rbinom(n = n, size = 1, prob = expit(pY))
+  
+  list(
+    Y = Y,
+    X = X,
+    G = G,
+    GX = GX
+  )
+}
+  
+a.sim <- function(
+  n,
+  omega,
+  alpha,
+  gamma,
+  beta,
+  zeta,
+  eta = 0,
+  kappa = 0,
+  lambda = 0
+) {
+  # genotype
+  G <- rbinom(n = n, size = 1, prob = omega)
+  # prs
+  X <- rnorm(n = n, mean = 0, sd = 1)
+  # age or another continuous normal confounder
+  A <- rnorm(n = n, mean = 0, sd = 1)
+  GX <- G * X
+  AX <- A * X
+  AG <- A * G
+  
+  pY <- alpha + beta * X + gamma * G + zeta * A + eta * GX + kappa * AX + lambda * AG
+  
+  Y <- rbinom(n = n, size = 1, prob = expit(pY))
+  
+  list(
+    Y = Y,
+    X = X,
+    G = G,
+    A = A
+  )
+}
 
 extract.args.for.function <- function(f, args.list) {
   formal.args <- names(formals(f))
@@ -30,7 +112,7 @@ z.test <- function(w, sim.result) {
   )
 }
 
-fit.sigmoid <- function(x, y, res.fit = 0.01) {
+fit.sigmoid <- function(x, y, res.fit) {
   sigmoid <- function(x, a, b, c) {
     1 / (1 + exp(-(a * x + b))) + c
   }
@@ -52,10 +134,6 @@ fit.sigmoid <- function(x, y, res.fit = 0.01) {
   fit.df
 }
 
-expit <- function(logit) {
-  exp(logit) / (1 + exp(logit))
-}
-
 mle.root <- function(f, f.params, start, maxiter=50) {
   root.params <- list(
     f = f,
@@ -67,14 +145,15 @@ mle.root <- function(f, f.params, start, maxiter=50) {
   c(root.result$root, root.result$iter)
 }
 
-mle.optim <- function(f, d, f.params, start, maxit=100) {
+mle.optim <- function(f, d, f.params, start) {
   optim.params <- list(
     par = start,
     fn = f,
     gr = d,
     method = "BFGS",
+    # method = "SANN",
     control = list(
-      maxit = maxit,
+      maxit = 256,
       fnscale = -1
     )
   )
@@ -82,27 +161,17 @@ mle.optim <- function(f, d, f.params, start, maxit=100) {
   f.call(optim, c(f.params, optim.params), force.incl = names(f.params))
 }
 
-lrt <- function(f.ll, ll.params) {
-  # calculate log likelihood
-  ll <- f.call(f.ll, ll.params)
-  # calculate liklihood ratio test statistic
-  # chi2 <- -2 * ll
-  chi2 <- 2 * ll
-  # return p.value
-  pchisq(chi2, df = 2, lower.tail = F)
-}
-
-mle <- function(sim.result, params, maxiter = 50, cases.only = T) {
-  f.params <- modifyList(params, sim.result)
-  f.params <- extract.args.for.function(D, f.params)
-  f.params <- modifyList(f.params, list(cases.only = cases.only))
+mle <- function(lrt.equations, lrt.data, params) {
+  # browser()
+  f.params <- modifyList(params, lrt.data)
+  f.params <- extract.args.for.function(lrt.equations$D, f.params)
   
   start <- c(
     rnorm(1, params$gamma, 0.3),
     rnorm(1, params$eta, 0.3)
   )
   
-  optimum <- mle.optim(L, D, f.params, start, maxit = maxiter)
+  optimum <- mle.optim(lrt.equations$L, lrt.equations$D, f.params, start)
   optim.result <- list(gamma = optimum$par[1], eta = optimum$par[2], iter = sum(optimum$counts))
   # root <- mle.root(D, f.params, start = start, maxiter = maxiter)
   # root.result <- list(gamma = root[1], eta = root[2], iter = root[3])
@@ -114,16 +183,16 @@ mle <- function(sim.result, params, maxiter = 50, cases.only = T) {
   return(NULL)
 }
 
-run.mle <- function(sim.result, params, cases.only = T) {
+run.lrt <- function(lrt.equations, lrt.data, params) {
   # solve MLE for gamma and eta (Cases Only)
-  root.params <- list(
-    sim.result = sim.result,
-    params = params,
-    cases.only = cases.only
+  mle.params <- list(
+    lrt.equations = lrt.equations,
+    lrt.data = lrt.data,
+    params = params
   )
-  root.result <- f.call(mle, root.params)
+  mle.result <- f.call(mle, mle.params)
   
-  if (is.null(root.result)) {
+  if (is.null(mle.result)) {
     return(list(
       iter = NA,
       gamma.est = NA,
@@ -135,61 +204,120 @@ run.mle <- function(sim.result, params, cases.only = T) {
   
   # calculate lrt test statistic and p-value
   ll.params <- modifyList(
-    sim.result,
+    lrt.data,
     modifyList(
       params,
-      root.result # this overrides gamma and eta w/ the new values
+      mle.result # this overrides gamma and eta w/ the new values
     )
   )
-  ll.params$cases.only <- cases.only
   
-  ll <- f.call(LL, ll.params)
+  ll <- f.call(lrt.equations$LR, ll.params)
   chi2 <- 2 * ll
   p.val <- pchisq(chi2, df = 2, lower.tail = F)
   
-  modifyList(root.result, list(ll = ll, lrt.p.val = p.val))
+  modifyList(mle.result, list(ll = ll, lrt.p.val = p.val))
 }
 
-run.lrt <- function(f.lrt, params, n.sims) {
-  print(unlist(purrr::map(params, ~ format(., scientific = F))))
-  
+run.lrt.sims <- function(f.lrt, params, n.sims) {
+  # print(unlist(purrr::map(params, ~ format(., scientific = F))))
+  #
   n.complete <- 0
   lrt.result <- data.frame()
   # run in batches of n.batch until n.sims complete
   while (n.complete < n.sims) {
     n.to.run <- min(n.batch, n.sims - n.complete)
-    
+
     # run n.to.run sims/tests
-    lrt.batch <- mclapply(seq(n.to.run), function(i) {
+    lrt.batch <- parallel::mclapply(seq(n.sims), function(i) {
       f.lrt(params)
-    }, mc.cores = n.cores) %>%
-      do.call(bind_rows, .)
+    }, mc.cores = n.cores)
+    
+    errors <- purrr::keep(lrt.batch, function(e) inherits(e, 'try-error'))
+    if (length(errors)) {
+      stop(errors[!duplicated(as.character(errors))])
+    }
     
     n.complete <- n.complete + n.to.run
-    
-    lrt.result <- bind_rows(lrt.result, lrt.batch)
+
+    lrt.result <- bind_rows(lrt.result, bind_rows(lrt.batch))
   }
   
+  # for (param in names(params)) {
+  #   lrt.result[[paste0('param.', param)]] <- params[[param]]
+  # }
+    
   lrt.result
 }
 
-save.plot <- function(my.plot, file.prefix, root.dir = getwd(), sub.dir = '', w = 7.35 * 2, h = 4.5 * 2) {
-  # save plot (defaults to last_plot())
-  #
-  # @param filename   filename for save
-  # @param plot       plot to save
-  # @param dir        directory for save
-  # @param w          plot width
-  # @param h          plot height
+save.plot.as.ext <- function(
+    ext,
+    my.plot,
+    file.prefix,
+    root.dir = getwd(),
+    sub.dir = '',
+    w = 6.5,
+    h = 4.875,
+    dpi = 1000
+) {
+  dir.create(file.path(root.dir, ext, sub.dir), showWarnings = F, recursive = T)
+  ggsave(
+    filename = file.path(
+      root.dir,
+      ext,
+      sub.dir,
+      paste(file.prefix, ext, sep='.')
+    ),
+    plot = my.plot,
+    width = w,
+    height = h,
+    dpi = dpi,
+    units = "in"
+  )
+}
+
+save.plot <- function(
+    my.plot,
+    file.prefix,
+    root.dir = getwd(),
+    sub.dir = '',
+    w = 6.5,
+    h = 4.875,
+    dpi = 1000
+  ) {
+  save.plot.as.ext('png', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
+  save.plot.as.ext('pdf', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
+  save.plot.as.ext('svg', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
   
-  dir.create(file.path(root.dir, 'svg', sub.dir), showWarnings = F, recursive = T)
-  dir.create(file.path(root.dir, 'png', sub.dir), showWarnings = F, recursive = T)
-  dir.create(file.path(root.dir, 'pdf', sub.dir), showWarnings = F, recursive = T)
-  
-  ggsave(filename = file.path(root.dir, 'svg', sub.dir, paste0(file.prefix, '.svg')), plot = my.plot, width = w, height = h)
-  ggsave(filename = file.path(root.dir, 'png', sub.dir, paste0(file.prefix, '.png')), plot = my.plot, width = w, height = h)
-  pdf(file = file.path(root.dir, 'pdf', sub.dir, paste0(file.prefix, '.pdf')), width = w, height = h)
-  print(my.plot)
-  x <- dev.off()
   my.plot
+}
+
+export.figure <- function(
+    my.plot,
+    file.prefix,
+    root.dir = getwd(),
+    sub.dir = '',
+    fig.type = 'double.column',
+    aspect.ratio = NA
+) {
+  if (fig.type == 'single.column') {
+    width = 3.25
+    std.aspect.ratio = 1
+  } else if (fig.type == 'double.column') {
+    width = 6.5
+    std.aspect.ratio = 4/3
+  } else if (fig.type == 'full.page') {
+    width = 6.5
+    std.aspect.ratio = 4/3
+  } else {
+    stop(paste("Invalid fig.type: ", fig.type))
+  }
+  
+  aspect.ratio = ifelse(!is.na(aspect.ratio), aspect.ratio, std.aspect.ratio)
+  h = w / aspect.ratio
+  
+  if (h > 8) {
+    stop(paste("Calculated height from aspect ratio to large: ", h))
+  }
+  
+  save.plot(my.plot, file.prefix, root.dir, sub.dir, w, h)
 }

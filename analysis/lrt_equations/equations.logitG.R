@@ -1,28 +1,6 @@
-define.logitG.equations <- function() {
-  sim <- function(
-    n,
-    alpha,
-    beta,
-    gamma,
-    eta,
-    omega
-  ) {
-    G <- rbinom(n = n, size = 1, prob = omega)
-    
-    X <- rnorm(n = n, mean = 0, sd = 1)
-    
-    GX <- G * X
-    
-    pY <- alpha + beta * X + gamma * G + eta * GX
-    
-    Y <- rbinom(n = n, size = 1, prob = expit(pY))
-    
-    list(
-      Y = Y,
-      X = X,
-      G = G,
-      GX = GX
-    )
+define.logitG.equations <- function(cases.only = T) {
+  raise.power <- function(base, exponent) {
+    base ** exponent
   }
   
   fY1XG1 <- function(alpha, beta, gamma, eta, X) {
@@ -139,7 +117,7 @@ define.logitG.equations <- function() {
     - numerator / denominator
   }
   
-  GRPSUM <- function(omega, alpha, beta, gamma, eta, X, Y, G, f1, f2, f3, f4, cases.only = T) {
+  GRPSUM <- function(omega, alpha, beta, gamma, eta, X, Y, G, f1, f2, f3, f4) {
     grp1 <- which(Y == 1 & G == 1)
     grp2 <- which(Y == 1 & G == 0)
     
@@ -162,33 +140,33 @@ define.logitG.equations <- function() {
     )
   }
   
-  DGamma <- function(omega, alpha, beta, gamma, eta, X, Y, G, cases.only) {
-    GRPSUM(omega, alpha, beta, gamma, eta, X, Y, G, DR1Gamma, DR2Gamma, DR3Gamma, DR4Gamma, cases.only)
+  DGamma <- function(omega, alpha, beta, gamma, eta, X, Y, G) {
+    GRPSUM(omega, alpha, beta, gamma, eta, X, Y, G, DR1Gamma, DR2Gamma, DR3Gamma, DR4Gamma)
   }
   
-  DEta <- function(omega, alpha, beta, gamma, eta, X, Y, G, cases.only) {
-    GRPSUM(omega, alpha, beta, gamma, eta, X, Y, G, DR1Eta, DR2Eta, DR3Eta, DR4Eta, cases.only)
+  DEta <- function(omega, alpha, beta, gamma, eta, X, Y, G) {
+    GRPSUM(omega, alpha, beta, gamma, eta, X, Y, G, DR1Eta, DR2Eta, DR3Eta, DR4Eta)
   }
   
-  LL <- function(omega, alpha, beta, gamma, eta, X, Y, G, cases.only) {
-    GRPSUM(omega, alpha, beta, gamma, eta, X, Y, G, lR1, lR2, lR3, lR4, cases.only)
+  LR <- function(omega, alpha, beta, gamma, eta, X, Y, G) {
+    GRPSUM(omega, alpha, beta, gamma, eta, X, Y, G, lR1, lR2, lR3, lR4)
   }
   
-  L <- function(params, omega, alpha, beta, X, Y, G, cases.only) {
+  L <- function(params, omega, alpha, beta, X, Y, G) {
     gamma <- params[1]
     eta <- params[2]
     
-    LL(omega, alpha, beta, gamma, eta, X, Y, G, cases.only)
+    LR(omega, alpha, beta, gamma, eta, X, Y, G)
   }
   
-  D <- function(params, omega, alpha, beta, X, Y, G, cases.only) {
+  D <- function(params, omega, alpha, beta, X, Y, G) {
     gamma <- params[1]
     eta <- params[2]
     c(
       # cases only cumulative derivative wrt gamma
-      DGamma(omega, alpha, beta, gamma, eta, X, Y, G, cases.only),
+      DGamma(omega, alpha, beta, gamma, eta, X, Y, G),
       # cases only cumulative derivative wrt eta
-      DEta(omega, alpha, beta, gamma, eta, X, Y, G, cases.only)
+      DEta(omega, alpha, beta, gamma, eta, X, Y, G)
     )
   }
   
@@ -231,19 +209,9 @@ define.logitG.equations <- function() {
   }
   
   list(
-    sim = sim,
-    DR1Gamma = DR1Gamma,
-    DR2Gamma = DR2Gamma,
-    DR1Eta = DR1Eta,
-    DR2Eta = DR2Eta,
-    D = D,
     L = L,
-    DGamma = DGamma,
-    DEta = DEta,
-    LL = LL,
+    D = D,
+    LR = LR,
     fisher.info = fisher.info
   )
 }
-
-lrt.logitG.equations <- define.logitG.equations()
-rm(define.logitG.equations)

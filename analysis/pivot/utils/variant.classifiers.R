@@ -1,3 +1,6 @@
+# define "rare' variant cutoff - 0.1% allele frequency
+gnomad.cutoff <- 0.001
+
 class.na.false <- function(rv.flags) {
   rv.flags %>%
   rowwise() %>%
@@ -28,5 +31,19 @@ classify.lof <- function(annotations) {
   annotations %>%
     mutate(
       class.loss.of.function = grepl('stop_gained|frameshift_truncation', mutation.type, ignore.case=T),
+    )
+}
+
+classify.synonymous <- function(annotations) {
+  annotations %>%
+    mutate(
+      class.synonymous = grepl('synonymous_variant', mutation.type, ignore.case=T),
+    )
+}
+
+classify.missense <- function(annotations) {
+  annotations %>%
+    mutate(
+      class.missense = grepl('missense_variant', mutation.type, ignore.case=T),
     )
 }

@@ -1,5 +1,6 @@
 library(dplyr, quietly = T, warn.conflicts = F)
 library(purrr, quietly = T, warn.conflicts = F)
+library(ggplot2, quietly = T, warn.conflicts = F)
 library(conflicted, quietly = T, warn.conflicts = F)
 
 conflict_prefer("select", "dplyr", quiet = T)
@@ -28,7 +29,8 @@ concat.df.list <- function(df.list, key.cols) {
           df[[key.cols]] <- key
           df
         }) %>%
-        do.call(rbind, .)
+        do.call(rbind, .) %>%
+        select(all_of(key.cols), everything())
     )
   }
   
@@ -109,11 +111,14 @@ save.plot <- function(my.plot, file.prefix, root.dir = getwd(), sub.dir = '', w 
   dir.create(file.path(root.dir, 'svg', sub.dir), showWarnings = F, recursive = T)
   dir.create(file.path(root.dir, 'png', sub.dir), showWarnings = F, recursive = T)
   dir.create(file.path(root.dir, 'pdf', sub.dir), showWarnings = F, recursive = T)
+  dir.create(file.path(root.dir, 'rds', sub.dir), showWarnings = F, recursive = T)
   
-  ggsave(filename = file.path(root.dir, 'svg', sub.dir, paste0(file.prefix, '.svg')), plot = my.plot, width = w, height = h)
-  ggsave(filename = file.path(root.dir, 'png', sub.dir, paste0(file.prefix, '.png')), plot = my.plot, width = w, height = h)
-  pdf(file = file.path(root.dir, 'pdf', sub.dir, paste0(file.prefix, '.pdf')), width = w, height = h)
-  print(my.plot)
-  x <- dev.off()
+  ggsave(filename = file.path(root.dir, 'svg', sub.dir, paste0(file.prefix, '.svg')), plot = my.plot, width = w, height = h, dpi = 1000, units = "in")
+  ggsave(filename = file.path(root.dir, 'png', sub.dir, paste0(file.prefix, '.png')), plot = my.plot, width = w, height = h, dpi = 1000, units = "in")
+  ggsave(filename = file.path(root.dir, 'pdf', sub.dir, paste0(file.prefix, '.pdf')), plot = my.plot, width = w, height = h, dpi = 1000, units = "in")
+  saveRDS(my.plot, file = file.path(root.dir, 'rds', sub.dir, paste0(file.prefix, '.rds')))
+  # pdf(file = file.path(root.dir, 'pdf', sub.dir, paste0(file.prefix, '.pdf')), width = w, height = h)
+  # print(my.plot)
+  # x <- dev.off()
   my.plot
 }

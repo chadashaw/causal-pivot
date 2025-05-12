@@ -1,4 +1,4 @@
-define.liabilityG.equations <- function() {
+define.liabilityG.equations <- function(cases.only=T) {
   library(pracma, quietly = T, warn.conflicts = F) # for erfc()
 
   sim <- function(
@@ -268,7 +268,7 @@ define.liabilityG.equations <- function() {
     numerator / denominator
   }
   
-  GRPSUM <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, f1, f2, f3, f4, cases.only) {
+  GRPSUM <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, f1, f2, f3, f4) {
     grp1 <- which(y >= delta & G == 1)
     grp2 <- which(y >= delta & G == 0)
     
@@ -291,43 +291,40 @@ define.liabilityG.equations <- function() {
     )
   }
   
-  DGamma <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, cases.only) {
-    GRPSUM(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, DR1Gamma, DR2Gamma, DR3Gamma, DR4Gamma, cases.only)
+  DGamma <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G) {
+    GRPSUM(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, DR1Gamma, DR2Gamma, DR3Gamma, DR4Gamma)
   }
   
-  DEta <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, cases.only) {
-    GRPSUM(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, DR1Eta, DR2Eta, DR3Eta, DR4Eta, cases.only)
+  DEta <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G) {
+    GRPSUM(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, DR1Eta, DR2Eta, DR3Eta, DR4Eta)
   }
   
-  L <- function(params, omega, alpha, beta, delta, sige, X, y, G, cases.only) {
+  L <- function(params, omega, alpha, beta, delta, sige, X, y, G) {
     gamma <- params[1]
     eta <- params[2]
     
-    LL(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, cases.only)
+    LR(omega, alpha, beta, gamma, eta, delta, sige, X, y, G)
   }
   
-  D <- function(params, omega, alpha, beta, delta, sige, X, y, G, cases.only) {
+  D <- function(params, omega, alpha, beta, delta, sige, X, y, G) {
     gamma <- params[1]
     eta <- params[2]
     c(
       # cases only cumulative derivative wrt gamma
-      DGamma(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, cases.only),
+      DGamma(omega, alpha, beta, gamma, eta, delta, sige, X, y, G),
       # cases only cumulative derivative wrt eta
-      DEta(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, cases.only)
+      DEta(omega, alpha, beta, gamma, eta, delta, sige, X, y, G)
     ) 
   }
   
-  LL <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, cases.only) {
-    GRPSUM(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, lR1, lR2, lR3, lR4, cases.only)
+  LR <- function(omega, alpha, beta, gamma, eta, delta, sige, X, y, G) {
+    GRPSUM(omega, alpha, beta, gamma, eta, delta, sige, X, y, G, lR1, lR2, lR3, lR4)
   }
   
   list(
     sim = sim,
     L = L,
     D = D,
-    LL = LL
+    LR = LR
   )
 }
-
-lrt.liabilityG.equations <- define.liabilityG.equations()
-rm(define.liabilityG.equations)
