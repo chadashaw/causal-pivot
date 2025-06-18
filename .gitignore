@@ -2,6 +2,7 @@
 .nextflow*
 *.RData
 .Rhistory
+.Rprofile
 .Renviron
 .Rproj.user*
 .Rproj.user
@@ -17,3 +18,5 @@ work*
 *.html
 *bin/
 analysis/pivot/alzheimers
+sim_runner
+pgsc_calc

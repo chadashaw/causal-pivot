@@ -26,6 +26,7 @@ annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
 cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
 cohort.marks <- readRDS(file.path(DATA_DIR, 'cohort.marks.rds'))
 rv.mtx <- readRDS(file.path(DATA_DIR, 'rv.mtx.rds'))
+prs.sig.marker.ids <- readRDS(file.path(DATA_DIR, 'prs.sig.marker.ids.rds'))
 ```
 
 ## Create publishable variant Excel workbook
@@ -35,50 +36,18 @@ for supplemental materials and analysis.
 
 ```{r export_excel, cache=T}
 local({
-  prs.cohort.summary.df <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
-    gene.grp <- cohort.lkps$gene.grp[cohort.name]
-    cohort.rv.marker.ids <- rv.flags[rv.flags$gene == gene.grp & rv.flags$pathogenic,]$marker.id
-    cohort.gts <- as.data.frame(as.matrix(rv.mtx[cohort.df$sample.id,cohort.rv.marker.ids] ))
-    n.control <- sum(!cohort.df$case)
-    n.case <- sum(cohort.df$case)
-    purrr::imap(cohort.gts, function(gts, marker.id) {
-      cohort.df$gt <- gts[match(cohort.df$sample.id, rownames(cohort.gts))]
-      
-      freq.df <-  cohort.df %>%
-        group_by(case) %>%
-        summarize(f = mean(gt)) %>%
-        ungroup()
-      
-      cohort.df %>%
-        group_by(case) %>%
-        filter(gt == 1) %>%
-        summarize(prs.mean = mean(prs), n = n()) %>%
-        ungroup() %>%
-        mutate(marker.id = marker.id) %>%
-        ungroup() %>%
-        inner_join(freq.df, by = 'case')
-    }) %>%
-        do.call(bind_rows, .)
-  }) %>% concat.df.list(key.cols = 'cohort.name') %>%
-    mutate(case = ifelse(case, 'case', 'control')) %>%
-    pivot_wider(id_cols = c('cohort.name', 'marker.id'), names_from = 'case', values_from = c('prs.mean', 'f', 'n')) %>%
-    select(
-      `Marker` = 'marker.id',
-      `Cohort` = 'cohort.name',
-      `Mean PRS (Controls)` = 'prs.mean_control',
-      `Mean PRS (Cases)` = 'prs.mean_case',
-      `RV+ Count (Controls)` = 'n_control',
-      `RV+ Count (Cases)` = 'n_case',
-      `RV+ Frequency (Controls)` = 'f_control',
-      `RV+ Frequency (Cases)` = 'f_case' 
-    )
+  all.mtx <- as.matrix(readRDS(file.path(DATA_DIR, 'geno.mtx.rds'))[,rv.flags$marker.id])
+  wb <- openxlsx::createWorkbook()
   
   rv.summary.df <- annotations %>%
-    filter(marker.id %in% rv.flags[rv.flags$pathogenic,]$marker.id) %>%
-    mutate(cohort.af = apply(rv.mtx, 2, mean)[match(marker.id, colnames(rv.mtx))]) %>%
+    inner_join(rv.flags, by = 'marker.id') %>%
+    mutate(
+      prs.assoc = marker.id %in% prs.sig.marker.ids,
+      cohort.af = apply(rv.mtx, 2, mean)[match(marker.id, colnames(rv.mtx))],
+    ) %>%
     select(
       `Marker` = marker.id,
-      `Gene` = gene,
+      `Gene` = gene.x,
       `Transcript` = transcript,
       `Chrom` = chrom,
       `Position` = pos,
@@ -93,13 +62,130 @@ local({
       `Clinvar Sign. Conflicting` = clinvar.sig_conf,
       `Revel` = revel.score,
       `CADD` = cadd_exome.phred,
+      `RV Pos.` = class.positive,
+      `Controls (Rare Synonymous)` = class.rare.synonymous,
+      `PRS Assoc` = prs.assoc,
+      `Selected RV Pos.` = pathogenic,
+      `Selected Controls` = control,
+      `Clinvar Pathogenic` = class.clinvar.pathogenic,
+      `Rare` = class.rare,
+      `Loss of Function` = class.loss.of.function,
+      `Synonymous` = class.synonymous,
     )
   
-  wb <- openxlsx::createWorkbook()
   openxlsx::addWorksheet(wb, "Annotations")
-  openxlsx::writeData(wb, "Annotations", rv.summary.df)
-  openxlsx::addWorksheet(wb, "PRS + Counts")
-  openxlsx::writeData(wb, "PRS + Counts", prs.cohort.summary.df)
+  openxlsx::writeDataTable(wb, "Annotations", rv.summary.df)
+  
+  local({
+    openxlsx::addWorksheet(wb, "PRS + Counts")
+    
+    process.variants <- function(my.cohort.name) {
+      prs.name <- cohort.lkps$prs[[my.cohort.name]]
+      df <- rv.prs.df[,c('sample.id', my.cohort.name, cohort.lkps$prs[[my.cohort.name]])] %>%
+        magrittr::set_colnames(c('sample.id', 'case', 'prs')) %>%
+        mutate(cohort = my.cohort.name) %>%
+        filter(!is.na(case))
+      
+      summary.df <- pbapply::pbapply(all.mtx, 2, function(sample.gts) {
+        df$gt <- sample.gts[df$sample.id]
+        
+        freq.df <-  df %>%
+          group_by(case) %>%
+          summarize(f = mean(gt)) %>%
+          ungroup()
+        
+        prs.mean.df <- df %>%
+          group_by(case) %>%
+          filter(gt == 1) %>%
+          summarize(prs.mean = mean(prs), n = n()) %>%
+          ungroup() %>%
+          inner_join(freq.df, by = 'case')
+      }) %>%
+        purrr::list_rbind(names_to = 'marker.id') %>%
+        mutate(
+          case = ifelse(case, 'case', 'control')
+        ) %>%
+        pivot_wider(id_cols = c('marker.id'), names_from = c('case'), values_from = c('prs.mean', 'f', 'n')) %>%
+        mutate(
+          cohort.name = my.cohort.name
+        ) %>%
+        select(
+          `Marker` = 'marker.id',
+          `Cohort` = 'cohort.name',
+          `Mean PRS (Controls)` = 'prs.mean_control',
+          `Mean PRS (Cases)` = 'prs.mean_case',
+          `RV+ Count (Controls)` = 'n_control',
+          `RV+ Count (Cases)` = 'n_case',
+          `RV+ Frequency (Controls)` = 'f_control',
+          `RV+ Frequency (Cases)` = 'f_case'
+        ) %>%
+        left_join(select(
+          rv.summary.df,
+          `Marker`,
+          `Gene`,
+          `RV Pos.`,
+          `Controls (Rare Synonymous)`,
+          `PRS Assoc`,
+          `Selected RV Pos.`,
+          `Selected Controls`,
+          `Clinvar Pathogenic`,
+          `Rare`,
+          `Loss of Function`,
+          `Synonymous`,
+        ), by = 'Marker')
+    }
+    
+    first.written <- F
+    n.written <- 0
+    for (my.cohort.name in names(cohorts)) {
+      my.df <- process.variants(my.cohort.name)
+      if (!first.written) {
+        openxlsx::writeDataTable(wb, "PRS + Counts", my.df[0,])
+        first.written <- T
+      }
+      openxlsx::writeData(wb, "PRS + Counts", my.df, startRow = 2 + n.written, colNames = F)
+      n.written <- n.written + nrow(my.df)
+    }
+  })
+  
+  # prs.cohort.summary.df <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
+  #   gene.grp <- cohort.lkps$gene.grp[cohort.name]
+  #   cohort.rv.marker.ids <- rv.flags[rv.flags$gene == gene.grp & rv.flags$pathogenic,]$marker.id
+  #   cohort.gts <- as.data.frame(as.matrix(rv.mtx[cohort.df$sample.id,cohort.rv.marker.ids] ))
+  #   n.control <- sum(!cohort.df$case)
+  #   n.case <- sum(cohort.df$case)
+  #   purrr::imap(cohort.gts, function(gts, marker.id) {
+  #     cohort.df$gt <- gts[match(cohort.df$sample.id, rownames(cohort.gts))]
+  #     
+  #     freq.df <-  cohort.df %>%
+  #       group_by(case) %>%
+  #       summarize(f = mean(gt)) %>%
+  #       ungroup()
+  #     
+  #     cohort.df %>%
+  #       group_by(case) %>%
+  #       filter(gt == 1) %>%
+  #       summarize(prs.mean = mean(prs), n = n()) %>%
+  #       ungroup() %>%
+  #       mutate(marker.id = marker.id) %>%
+  #       ungroup() %>%
+  #       inner_join(freq.df, by = 'case')
+  #   }) %>%
+  #       do.call(bind_rows, .)
+  # }) %>% concat.df.list(key.cols = 'cohort.name') %>%
+  #   mutate(case = ifelse(case, 'case', 'control')) %>%
+  #   pivot_wider(id_cols = c('cohort.name', 'marker.id'), names_from = 'case', values_from = c('prs.mean', 'f', 'n')) %>%
+  #   select(
+  #     `Marker` = 'marker.id',
+  #     `Cohort` = 'cohort.name',
+  #     `Mean PRS (Controls)` = 'prs.mean_control',
+  #     `Mean PRS (Cases)` = 'prs.mean_case',
+  #     `RV+ Count (Controls)` = 'n_control',
+  #     `RV+ Count (Cases)` = 'n_case',
+  #     `RV+ Frequency (Controls)` = 'f_control',
+  #     `RV+ Frequency (Cases)` = 'f_case' 
+  #   )
+  
   openxlsx::saveWorkbook(wb, file.path(OUT_DIR, 'rv.summary.xlsx'), overwrite = T)
 })
 ```
@@ -178,6 +264,10 @@ functional type.
 
 ```{r plot_variant_spread_histogram, cache=T}
 # create dataframe counting positive samples per variants w/ SO annotation ####
+
+cases <- rv.prs.df %>% filter((!is.na(HC190) & HC190) | (!is.na(BC) & BC) | (PD & !is.na(PD))) %>% pull(sample.id)
+
+rv.prs.df %>% filter(sample.id %in% names(cohort.marks[cohort.marks == 'PD']) )
 
 alt.counts <- alt.sums.by.sample(rv.mtx, cohort.marks) %>%
   mtx.to.df('cohort', 'marker.id', 'alt.count') %>%

@@ -297,15 +297,19 @@ rv.flags <- local({
   
   # run heuristics
   annotations %>%
-    filter(gene %in% c(unlist(gene.lkps$grp.to.genes), lsd.genes)) %>%
+    # NOTE TO SELF: the LSD genes need to be controlled for ancestry association as well
+    # but adding them here includes them in the rv.flags object which the rest of the code
+    # does not expect - figure it out
+    # filter(gene %in% c(unlist(gene.lkps$grp.to.genes), lsd.genes)) %>%
+    filter(gene %in% unlist(gene.lkps$grp.to.genes)) %>%
     classify.clinvar() %>%
     classify.lof() %>%
     classify.synonymous() %>%
     classify.missense() %>%
     mutate(
-      # af = ifelse(is.na(gnomad3.af_nfe), 0, gnomad3.af_nfe),
-      # class.rare = af < gnomad.cutoff,
-      class.rare = gnomad3.af_nfe < gnomad.cutoff
+      af = ifelse(is.na(gnomad3.af_nfe), 0, gnomad3.af_nfe),
+      class.rare = af < gnomad.cutoff,
+      # class.rare = gnomad3.af_nfe < gnomad.cutoff
     ) %>%
     class.na.false() %>%
     mutate(
@@ -316,11 +320,12 @@ rv.flags <- local({
     select(
       marker.id,
       gene,
-      class.positive,
-      class.rare.synonymous,
-      class.rare.missense,
+      starts_with('class'),
+      # class.positive,
+      # class.rare.synonymous,
+      # class.rare.missense,
     )
-})  
+})
 ```
 
 ## Flag markers strongly correlated w/ PRS
@@ -355,7 +360,10 @@ for (cohort.name in names(cohorts)) {
     cohort.marker.ids <-
       rv.flags[
         rv.flags$gene %in% cohort$genes |
-          (rv.flags$class.positive & rv.flags$gene %in% lsd.genes),
+          (
+            (rv.flags$class.positive | rv.flags$class.rare.synonymous) &
+             rv.flags$gene %in% lsd.genes
+          ),
       ]$marker.id
   } else {
     cohort.marker.ids <- rv.flags[rv.flags$gene %in% cohort$genes,]$marker.id
@@ -547,19 +555,6 @@ cohort.dfs <- purrr::imap(cohorts, function(cohort, cohort.name) {
     left_join(select(cohort.meta, sample.id, age), by = 'sample.id')
 })
 
-# save results ####
-
-saveRDS(cohorts, file = file.path(DATA_DIR, 'cohorts.rds'))
-saveRDS(cohort.lkps, file = file.path(DATA_DIR, 'cohort.lkps.rds'))
-saveRDS(gene.lkps, file = file.path(DATA_DIR, 'gene.lkps.rds'))
-saveRDS(cohort.marks, file = file.path(DATA_DIR, 'cohort.marks.rds'))
-saveRDS(rv.mtx, file = file.path(DATA_DIR, 'rv.mtx.rds'))
-
-saveRDS(prs, file = file.path(OUT_DIR, 'prs.rds'))
-saveRDS(rv.flags, file = file.path(OUT_DIR, 'rv.flags.rds'))
-saveRDS(rv.prs.df, file = file.path(OUT_DIR, 'rv.prs.df.rds'))
-saveRDS(cohort.dfs, file = file.path(OUT_DIR, 'cohort.dfs.rds'))
-
 # residualize HC prs from LDLR
 # cohort.dfs$HC190$prs <- lm(prs ~ rv, data = cohort.dfs$HC190)$residuals
 ```
@@ -594,9 +589,24 @@ cv.cohort.dfs <- purrr::imap(cohorts, function(cohort, cohort.name) {
     magrittr::set_colnames(c('sample.id', 'case', 'rv', 'prs')) %>%
     left_join(select(cohort.meta, sample.id, age), by = 'sample.id')
 })
+```
 
+### Save Results
+
+```{r}
 # save results ####
+saveRDS(cohorts, file = file.path(DATA_DIR, 'cohorts.rds'))
+saveRDS(cohort.lkps, file = file.path(DATA_DIR, 'cohort.lkps.rds'))
+saveRDS(gene.lkps, file = file.path(DATA_DIR, 'gene.lkps.rds'))
+saveRDS(cohort.marks, file = file.path(DATA_DIR, 'cohort.marks.rds'))
+saveRDS(rv.mtx, file = file.path(DATA_DIR, 'rv.mtx.rds'))
+saveRDS(cv.mtx, file = file.path(DATA_DIR, 'cv.mtx.rds'))
 
+saveRDS(prs, file = file.path(OUT_DIR, 'prs.rds'))
+saveRDS(rv.flags, file = file.path(OUT_DIR, 'rv.flags.rds'))
+saveRDS(rv.prs.df, file = file.path(OUT_DIR, 'rv.prs.df.rds'))
+saveRDS(cohort.dfs, file = file.path(OUT_DIR, 'cohort.dfs.rds'))
 saveRDS(cv.prs.df, file = file.path(OUT_DIR, 'cv.prs.df.rds'))
 saveRDS(cv.cohort.dfs, file = file.path(OUT_DIR, 'cv.cohort.dfs.rds'))
 ```
+

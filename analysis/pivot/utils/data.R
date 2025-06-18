@@ -2,7 +2,7 @@ library(dplyr, quietly = T, warn.conflicts = F)
 
 default.na <- function(err) NA
 
-p.val.stars <- function(p.val) {
+p.val.stars <- function(p.val, n.s = 'n.s.') {
   if (is.na(p.val) || is.null(p.val)) {
     return('n.a')
   }
@@ -13,7 +13,7 @@ p.val.stars <- function(p.val) {
       '**',
       ifelse(p.val < 0.05,
         '*',
-        'n.s.'
+        n.s
       )
     )
   )

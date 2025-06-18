@@ -249,6 +249,18 @@ run.lrt.sims <- function(f.lrt, params, n.sims) {
   lrt.result
 }
 
+
+# run function lrt.func n.sims number of times using mle.params modified over params.ranges
+run.sim.ranges <- function(lrt.func, mle.params, params.ranges, n.sims = 1024) {
+  lrt.result <- apply(params.ranges, 1, function(grid.params) {
+    run.params <- modifyList(mle.params, as.list(grid.params))
+    run.lrt.sims(lrt.func, run.params, n.sims) %>%
+      modifyList(setNames(run.params, paste0('param.', names(run.params))))
+  }) %>%
+    do.call(bind_rows, .) %>%
+    as_tibble()
+}
+
 save.plot.as.ext <- function(
     ext,
     my.plot,
@@ -257,7 +269,8 @@ save.plot.as.ext <- function(
     sub.dir = '',
     w = 6.5,
     h = 4.875,
-    dpi = 1000
+    dpi = 1000,
+    ...
 ) {
   dir.create(file.path(root.dir, ext, sub.dir), showWarnings = F, recursive = T)
   ggsave(
@@ -271,7 +284,8 @@ save.plot.as.ext <- function(
     width = w,
     height = h,
     dpi = dpi,
-    units = "in"
+    units = "in",
+    ...
   )
 }
 
@@ -284,40 +298,10 @@ save.plot <- function(
     h = 4.875,
     dpi = 1000
   ) {
-  save.plot.as.ext('png', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
+  # save.plot.as.ext('png', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
   save.plot.as.ext('pdf', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
   save.plot.as.ext('svg', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
+  # save.plot.as.ext('tiff', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi, compression="lzw")
   
   my.plot
-}
-
-export.figure <- function(
-    my.plot,
-    file.prefix,
-    root.dir = getwd(),
-    sub.dir = '',
-    fig.type = 'double.column',
-    aspect.ratio = NA
-) {
-  if (fig.type == 'single.column') {
-    width = 3.25
-    std.aspect.ratio = 1
-  } else if (fig.type == 'double.column') {
-    width = 6.5
-    std.aspect.ratio = 4/3
-  } else if (fig.type == 'full.page') {
-    width = 6.5
-    std.aspect.ratio = 4/3
-  } else {
-    stop(paste("Invalid fig.type: ", fig.type))
-  }
-  
-  aspect.ratio = ifelse(!is.na(aspect.ratio), aspect.ratio, std.aspect.ratio)
-  h = w / aspect.ratio
-  
-  if (h > 8) {
-    stop(paste("Calculated height from aspect ratio to large: ", h))
-  }
-  
-  save.plot(my.plot, file.prefix, root.dir, sub.dir, w, h)
 }

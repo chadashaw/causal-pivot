@@ -127,7 +127,7 @@ postprocess.lrt.run <- function(lrt.run) {
         )
     }, error = function(msg) {
       warning("failure extracting leaf from lrt run")
-      return(null)
+      return(NULL)
     })
   })
 
@@ -249,6 +249,29 @@ plot.mle.perm.contour <- function(lrt.result) {
       axis_titles = 'collect'
     )
 }
+
+save.lrt.result.xl <- function(lrt.result, path) {
+  lrt.result.xl.sheetmap <- list(
+    'FWD_Est' = 'mle.target',
+    'LRT_Est.' = 'mle.run',
+    'Conf_Int' = 'conf.int',
+    'Perms' = 'mle.perm',
+    'perm.p.vals' = 'mle.p.vals'
+  )
+  
+  wb <- openxlsx::createWorkbook()
+  
+  lrt.result.xl.sheetmap %>%
+    purrr::map(~{
+      lrt.result[[.x]]
+    }) %>%
+    purrr::imap(~{
+      openxlsx::addWorksheet(wb, .y)
+      openxlsx::writeData(wb, .y, .x)
+    })
+  
+  openxlsx::saveWorkbook(wb, path, overwrite = T)
+}
 ```
 
 ## logit g
@@ -280,7 +303,7 @@ logitG.lrt.run <- purrr::map(cohort.dfs, function(cohort.df) {
       beta = lrt.est.model$estimate[2],
       gamma = 0,
       eta = 0,
-      omega = mean(lrt.data$G) # rare variant frequency in disease
+      omega = mean(lrt.data$G) # rare variant frequency
     )
     
     # run z comparison test
@@ -333,7 +356,7 @@ the equations for the logit g model w/ a (age) are given in
 
 ### perform logitg_a permutations
 
-```{r lrt_logitg_a_3_cohorts, cache=t}
+```{r lrt_logitg_a_3_cohorts, cache=t, eval = F}
 # source mle functions and load into local environment ####
 source('../lrt_equations/equations.logitg_a.r')
 logitg_a.lrt.equations <- define.logitg_a.equations(cases.only=t)
@@ -410,112 +433,80 @@ plot.mle.perm.hist(logitg_a.lrt.result) %>%
 
 ```{r lrt_logitg_age_partition_cohorts, cache=t}
 # source mle functions and load into local environment ####
-source('../lrt_equations/equations.logitg.r')
-logitG.lrt.equations <- define.logitg.equations(cases.only=t)
+source('../lrt_equations/equations.logitG.R')
+logitG.lrt.equations <- define.logitG.equations(cases.only=T)
 
 # perform mle testing under all cohorts ####
-
-logitG.age.low.lrt.run <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
-  print(paste0('logitg.age.low: ', cohort.name))
-  purrr::map(cohort.lkps$gene.grp, function(gene.grp) {
-    print(paste0('gene.grp: ', gene.grp))
-    lrt.data <- make.lrt.data(rv.prs.df, cohort.df, gene.grp) %>%
-      mutate(age.half = ntile(a, 2)) %>%
-      filter(age.half == 1)
+age.half.lrt.results <- seq(2) %>%
+  purrr::map(~{
+    logitG.age.low.lrt.run <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
+      print(paste0('logitg.age.low: ', cohort.name))
+      purrr::map(cohort.lkps$gene.grp, function(gene.grp) {
+        print(paste0('gene.grp: ', gene.grp))
+        lrt.data <- make.lrt.data(rv.prs.df, cohort.df, gene.grp) %>%
+          mutate(age.half = ntile(A, 2)) %>%
+          filter(age.half == .x)
+        
+        if (length(unique(lrt.data[lrt.data$Y == 1,]$G)) != 2) {
+          return(NULL)
+        }
+      
+        # calculate forward model parameter "targets"
+        mle.target <- broom::tidy(glm(Y ~ G * X, family = binomial(link = 'logit'), data = lrt.data))
+        
+        # estimate model parameters (alpha, beta, omega)
+        lrt.est.model <- broom::tidy(glm(Y ~ X, family = binomial(link = 'logit'), data = lrt.data))
+      
+        params <- list(
+          alpha = lrt.est.model$estimate[1],
+          beta = lrt.est.model$estimate[2],
+          gamma = 0,
+          eta = 0,
+          omega = mean(lrt.data$G) # rare variant frequency
+        )
     
-    if (length(unique(lrt.data[lrt.data$y == 1,]$g)) != 2) {
-      return(null)
-    }
-  
-    # calculate forward model parameter "targets"
-    mle.target <- broom::tidy(glm(y ~ g * x, family = binomial(link = 'logit'), data = lrt.data))
-    
-    # estimate model parameters (alpha, beta, omega)
-    lrt.est.model <- broom::tidy(glm(y ~ x, family = binomial(link = 'logit'), data = lrt.data))
-  
-    params <- list(
-      alpha = lrt.est.model$estimate[1],
-      beta = lrt.est.model$estimate[2],
-      gamma = 0,
-      eta = 0,
-      omega = mean(lrt.data$g) # rare variant frequency in disease
-    )
-
-    modifyList(
-      list(
-        params=params,
-        mle.target = mle.target
-      ),
-      run.lrt.tests(lrt.data, params, logitG.lrt.equations, n.mle.perms)
-    )
+        modifyList(
+          list(
+            params=params,
+            mle.target = mle.target
+          ),
+          run.lrt.tests(lrt.data, params, logitG.lrt.equations, n.mle.perms)
+        )
+      }) %>%
+        purrr::set_names(cohort.lkps$gene.grp)
+    })
   }) %>%
-    purrr::set_names(cohort.lkps$gene.grp)
-})
-
-logitg.age.low.lrt.result <- postprocess.lrt.run(logitG.age.low.lrt.run)
-
-logitg.age.high.lrt.run <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
-  print(paste0('logitg.age.high: ', cohort.name))
-  purrr::map(cohort.lkps$gene.grp, function(gene.grp) {
-    print(paste0('gene.grp: ', gene.grp))
-    lrt.data <- make.lrt.data(rv.prs.df, cohort.df, gene.grp) %>%
-      mutate(age.half = ntile(a, 2)) %>%
-      filter(age.half == 2)
-    
-    if (length(unique(lrt.data[lrt.data$y == 1,]$g)) != 2) {
-      return(null)
-    }
-  
-    # calculate forward model parameter "targets"
-    mle.target <- broom::tidy(glm(y ~ g * x, family = binomial(link = 'logit'), data = lrt.data))
-    
-    # estimate model parameters (alpha, beta, omega)
-    lrt.est.model <- broom::tidy(glm(y ~ x, family = binomial(link = 'logit'), data = lrt.data))
-  
-    params <- list(
-      alpha = lrt.est.model$estimate[1],
-      beta = lrt.est.model$estimate[2],
-      gamma = 0,
-      eta = 0,
-      omega = mean(lrt.data$g) # rare variant frequency in disease
-    )
-
-    modifyList(
-      list(
-        params=params,
-        mle.target = mle.target
-      ),
-      run.lrt.tests(lrt.data, params, logitG.lrt.equations, n.mle.perms)
-    )
-  }) %>%
-    purrr::set_names(cohort.lkps$gene.grp)
-})
-
-logitg.age.high.lrt.result <- postprocess.lrt.run(logitg.age.high.lrt.run)
+  purrr::map(postprocess.lrt.run)
 
 # save result
 
-saverds(logitg.age.low.lrt.result, file.path(out_dir, 'logitg.age.low.mle.result.rds'))
-saverds(logitg.age.high.lrt.result, file.path(out_dir, 'logitg.age.high.mle.result.rds'))
+saveRDS(age.half.lrt.results[[1]], file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))
+saveRDS(age.half.lrt.results[[2]], file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))
+
+age.half.lrt.results[[1]] <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))
+age.half.lrt.results[[2]] <- readRDS(file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))
+
+save.lrt.result.xl(age.half.lrt.results[[1]], file.path(OUT_DIR, 'logitG.age.low.lrt.result.xlsx'))
+save.lrt.result.xl(age.half.lrt.results[[2]], file.path(OUT_DIR, 'logitG.age.high.lrt.result.xlsx'))
 ```
 
 ### plot results
 
 ```{r, logitg_plots}
-logitg.age.low.lrt.result <- readrds(file.path(out_dir, 'logitg.age.low.mle.result.rds'))
-logitg.age.high.lrt.result <- readrds(file.path(out_dir, 'logitg.age.high.mle.result.rds'))
+logitG.age.low.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))
+logitG.age.high.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))
 
-logitg.age.high.lrt.result$mle.p.vals
+logitG.age.high.lrt.result$mle.p.vals
 
-plot.mle.perm.contour(logitg.age.low.lrt.result) %>%
-  save.plot('logitg.age.low.mle.permutation.contour', root.dir = plots_dir, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+plot.mle.perm.contour(logitG.age.low.lrt.result) %>%
+  save.plot('logitG.age.low.mle.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 
-plot.mle.perm.hist(logitg.age.low.lrt.result) %>%
-  save.plot('logitg.age.low.mle.permutation.histogram', root.dir = plots_dir, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+plot.mle.perm.hist(logitG.age.low.lrt.result) %>%
+  save.plot('logitG.age.low.mle.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 
-plot.mle.perm.contour(logitg.age.high.lrt.result) %>%
-  save.plot('logitg.age.high.mle.permutation.contour', root.dir = plots_dir, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+plot.mle.perm.contour(logitG.age.high.lrt.result) %>%
+  save.plot('logitG.age.high.mle.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 
-plot.mle.perm.hist(logitg.age.high.lrt.result) %>%
-  save.plot('logitg.age.high.mle.permutation.histogram', root.dir = plots_dir, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+plot.mle.perm.hist(logitG.age.high.lrt.result) %>%
+  save.plot('logitG.age.high.mle.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 ```

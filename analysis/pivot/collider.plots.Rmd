@@ -441,19 +441,28 @@ n.cv.events.df$cohort <- factor(n.cv.events.df$cohort, levels=names(cohorts))
 logitG.age.low.mle.p.vals <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))$mle.p.vals
 logitG.age.high.mle.p.vals <- readRDS(file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))$mle.p.vals
 
+a <- rv.prs.df %>%
+  left_join(select(cohort.meta, sample.id, age), by = 'sample.id') %>%
+  filter(PD) %>%
+  mutate(age.half = ntile(age, 2)) %>%
+  select(sample.id, LDLR, PD, age.half) %>%
+  filter(age.half == 1 & LDLR == T)
+
+
 n.tiles <- 2
 prs.tertiles.df <- rv.prs.df %>%
   left_join(select(cohort.meta, sample.id, age), by = 'sample.id') %>%
   pivot_longer(cols = all_of(names(cohorts)), names_to = 'cohort', values_to = 'in.cohort') %>%
+  filter(!is.na(in.cohort)) %>%
+  group_by(cohort) %>%
+  mutate(age.ntile = ntile(age, n.tiles)) %>%
+  ungroup() %>%
   filter(in.cohort) %>%
   pivot_longer(cols = starts_with("PRS"), names_to = "prs.name", values_to = "value") %>%
   rowwise() %>%
   filter(prs.name == cohorts[[cohort]]$prs) %>%
   ungroup() %>%
   pivot_longer(cols = all_of(names(gene.lkps$grp.to.genes)), names_to = "gene.grp", values_to = "rv") %>%
-  group_by(cohort) %>%
-  mutate(age.ntile = ntile(age, n.tiles)) %>%
-  ungroup() %>%
   # anti_join(gene.excludes.df, by=c('sample.id', 'gene.grp')) %>%
   # unite(cohort, prs.name, col="cohort", sep='/') %>%
   select(sample.id, cohort, age.ntile, value, gene.grp, rv) %>%
@@ -490,7 +499,7 @@ tertiles.p.vals <- pmap(age.tertiles.grid, function(my.cohort.name, gene.grp.nam
   do.call(bind_rows, .) %>%
   as_tibble() %>%
   rowwise() %>%
-  mutate(stars = p.val.stars(p.val)) %>%
+  mutate(stars = p.val.stars(p.val, n.s = '')) %>%
   ungroup() %>%
   left_join(
     n.events.df %>%
@@ -516,8 +525,7 @@ for (age.n.tile in seq(n.tiles)) {
   age.n.tile.p.vals$cohort <- factor(age.n.tile.p.vals$cohort, levels=names(cohorts))
 
   
-  age.tertiles.3x3[[age.n.tile]] <- (
-  age.n.tile.events.df %>%
+  age.tertiles.3x3[[age.n.tile]] <- age.n.tile.events.df %>%
     ggplot(aes(x = factor(prs.qnt), y = n)) +
     geom_bar(
       stat = "identity",
@@ -527,26 +535,38 @@ for (age.n.tile in seq(n.tiles)) {
     ) +
     facet_grid(rows = vars(cohort), cols = vars(gene.grp), scales = "free_y") +
     scale_y_continuous(expand = expansion(mult = c(0, 0.5))) +
-    geom_text(data = age.n.tile.p.vals, aes(label = stars, y = y), x = 3, vjust = -1/3, size = 6, show.legend=F) +
-    theme_bw() +
+    geom_text(data = age.n.tile.p.vals, aes(label = stars, y = y), x = 2.6, vjust = -1/3, size = 4, show.legend=F) +
+    theme_bw(base_family="Arial") +
     theme(
       panel.grid = element_blank(),
-      axis.text = element_text(size = 12, face = "bold"),
-      axis.ticks = element_line(linewidth = 1),
+      axis.text = element_text(size=7, family = "Arial", face = "bold"),
+      axis.title = element_text(size=8, family = "Arial", face = "bold"),
+      axis.ticks = element_line(linewidth = 0.53),
+      strip.text = element_text(size = 8, family = "Arial", face = "bold"),
       legend.position = "none",
-      axis.title = element_text(size = 24, face = "bold"),
-      strip.text = element_text(size = 11, face = "bold")
     ) +
     labs(
       x = "PRS Tertile",
       y = "Num RV+ Samples",
-      subtitle = paste('Age nTile:', age.n.tile)
+      # subtitle = paste('Age nTile:', age.n.tile)
     )
-  ) %>%
-     save.plot(paste0('age.3x3.tertiles.', age.n.tile), w = 4.5 * 2, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'collider')
 }
 
-age.tertiles.3x3 
+(
+  (
+    age.tertiles.3x3[[1]] + age.tertiles.3x3[[2]]
+  )
+  +
+    plot_annotation(tag_levels = 'A', tag_suffix = ')')
+) %>%
+   save.plot(
+     'age.3x3.tertiles',
+     root.dir = PLOTS_DIR,
+     sub.dir = 'collider',
+     w = 6.5,
+     h = 6.5*9/16
+    )
+
 
 # There a number of possibilities here:
 # 
@@ -558,8 +578,6 @@ age.tertiles.3x3
 ## Compose UKBB Collider Summary Plot
 
 ```{r collider_summary_plot}
-composed.theme <- 
-
 # panel.a <- cc.scatter + composed.theme + scale_y_continuous(limits = c(-1, 1), breaks = c(-1, 0, 1))
 panel.a <- tertiles.3x3
 panel.b <- mt.dist + 
