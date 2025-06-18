@@ -51,13 +51,12 @@ mle.optim <- function(f, d, f.params, start, maxit=100) {
   f.call(optim, c(f.params, optim.params), force.incl = names(f.params))
 }
 
-mle <- function(lrt.data, params, maxiter = 250, cases.only = T) {
+mle <- function(lrt.data, params, lrt.equations, maxiter = 250) {
   # add data to estimated model parameters
   f.params <- modifyList(params, lrt.data)
   # extract only those parameters needed for the optimizer
   # note: this ensures parameters to be estimated are actually estimated by multiroot
-  f.params <- extract.args.for.function(L, f.params)
-  f.params <- modifyList(f.params, list(cases.only = cases.only))
+  f.params <- extract.args.for.function(lrt.equations$L, f.params)
   
   start <- c(
     rnorm(1, params$gamma, 0.3),
@@ -65,7 +64,7 @@ mle <- function(lrt.data, params, maxiter = 250, cases.only = T) {
   )
   
   tryCatch({
-    optimum <- mle.optim(L, D, f.params, start, maxit = maxiter)
+    optimum <- mle.optim(lrt.equations$L, lrt.equations$D, f.params, start, maxit = maxiter)
     list(
       gamma = optimum$par[1],
       eta = optimum$par[2],
@@ -87,12 +86,11 @@ mle <- function(lrt.data, params, maxiter = 250, cases.only = T) {
   # }
 }
 
-run.lrt <- function(lrt.data, params, cases.only=T) {
-  # solve MLE for gamma and eta (Cases Only)
+run.lrt <- function(lrt.data, params, lrt.equations) {
   root.params <- list(
     lrt.data = lrt.data,
     params = params,
-    cases.only = cases.only
+    lrt.equations = lrt.equations
   )
   root.result <- f.call(mle, root.params)
   
@@ -114,11 +112,22 @@ run.lrt <- function(lrt.data, params, cases.only=T) {
       root.result # this overrides gamma and eta w/ the new values
     )
   )
-  ll.params$cases.only <- cases.only
   
-  ll <- f.call(LL, ll.params)
-  chi2 <- 2 * ll
+  lr <- f.call(lrt.equations$LR, ll.params)
+  chi2 <- 2 * lr
   p.val <- pchisq(chi2, df = 2, lower.tail = F)
   
-  modifyList(root.result, list(ll = ll, p.val = p.val))
+  modifyList(root.result, list(lr = lr, p.val = p.val))
+}
+
+z.test <- function(w, lrt.df) {
+  n.Y1 <- sum(lrt.df$Y)
+  n.Y1G1 <- sum(lrt.df$Y & lrt.df$G)
+  
+  z <- (n.Y1G1 - (n.Y1 * w)) / sqrt(w * (1 - w) * n.Y1)
+  
+  list(
+    z = z,
+    p.value = 1 - pnorm(z)
+  )
 }

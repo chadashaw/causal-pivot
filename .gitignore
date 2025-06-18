@@ -1,16 +1,1 @@
 .data
-.nextflow*
-*.RData
-.Rhistory
-.Renviron
-.Rproj.user*
-.Rproj.user
-*.Rproj work/*
-*.Rproj
-*.rds
-work*
-*.sqlite
-*__pycache__*
-*.tar.gz
-*.html
-*bin/

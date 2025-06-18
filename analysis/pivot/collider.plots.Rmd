@@ -1,0 +1,641 @@
+---
+title: "Collider Plots"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+---
+
+```{r collider_plots_deps, include=F}
+# library(paletteer, quietly = T, warn.conflicts = F)
+# library(waffle, quietly = T, warn.conflicts = F)
+library(patchwork, quietly = T, warn.conflicts = F)
+source("utils/main.R")
+source("utils/data.R")
+# 
+# rv.flags <- readRDS(file.path(OUT_DIR, 'rv.flags.rds'))
+cohort.dfs <- readRDS(file.path(OUT_DIR, 'cohort.dfs.rds'))
+rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
+cv.cohort.dfs <- readRDS(file.path(OUT_DIR, 'cv.cohort.dfs.rds'))
+cv.prs.df <- readRDS(file.path(OUT_DIR, 'cv.prs.df.rds'))
+alt.counts <- readRDS(file.path(OUT_DIR, 'alt.counts.rds'))
+
+cohort.meta <- readRDS(file.path(DATA_DIR, 'cohort.meta.rds'))
+cohorts <- readRDS(file.path(DATA_DIR, 'cohorts.rds'))
+gene.lkps <- readRDS(file.path(DATA_DIR, 'gene.lkps.rds'))
+mt.dist <- readRDS(file.path(DATA_DIR, 'mt.dist.rds'))
+# annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
+# cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
+# cohort.marks <- readRDS(file.path(DATA_DIR, 'cohort.marks.rds'))
+# rv.mtx <- readRDS(file.path(DATA_DIR, 'rv.mtx.rds'))
+```
+
+
+## Plot Case + Control Scatter Plot
+
+Demonstrate unconditional (Case + Control / CC) independence of RV status and PRS
+- a fundamental model assumption.
+
+### Pathogenic Variants
+
+```{r plot_collider_scatter}
+# massage cohort.dfs into a single dataframe containing correctly paired RV/PRS ####
+
+cc.prs.df <- concat.df.list(cohort.dfs, key.cols = 'cohort.name')
+# get summary stats for plotting ####
+
+cc.prs.stats.df <- cc.prs.df %>%
+  group_by(cohort.name, rv) %>%
+  summarize(
+    mean.prs = mean(prs),
+    err.prs = sqrt(var(prs)/n())
+  ) %>%
+  ungroup()
+
+# calculate p-values using logistic regression ####
+
+calc.p.val <- function(formula, data) { 
+  summary(
+    glm(formula,
+      data = data,
+      family = binomial(link='logit')
+    )
+  )[[12]][2,4]
+}
+
+cc.prs.pvals.df <- split(cc.prs.df, ~cohort.name) %>%
+  map(function(prs.df) {
+      tryCatch(calc.p.val(rv ~ prs, prs.df), error = default.na)
+  }) %>%
+  unlist() %>%
+  tibble::enframe(name="cohort.name", value="p.val")
+
+cc.prs.pvals.lbls <- cc.prs.pvals.df %>%
+  rowwise() %>%
+  mutate(stars = ifelse(p.val < 0.001, '***', ifelse(p.val < 0.01, '**', ifelse(p.val < 0.05, '*', 'n.s.'))))
+
+cc.prs.pvals.df 
+
+# create plot ####
+
+cc.prs.stats.df$cohort.name <- factor(cc.prs.stats.df$cohort.name, levels = names(cohort.dfs))
+
+cc.prs.pvals.lbls$cohort.name <- factor(cc.prs.pvals.lbls$cohort.name, levels = names(cohort.dfs))
+
+cc.scatter <- (
+  cc.prs.stats.df %>%
+  ggplot(aes(x = as.factor(rv), y = mean.prs, group = cohort.name)) +
+  facet_wrap(~cohort.name) +
+  geom_point(position = position_dodge(width = 0.2), size = 2) +
+  geom_errorbar(
+    aes(ymin = mean.prs - err.prs, ymax = mean.prs + err.prs),
+    position = position_dodge(width = 0.2),
+    width = 0.1
+  ) +
+  geom_line(
+    position = position_dodge(width = 0.2),
+  ) +
+  scale_x_discrete(labels = c("FALSE" = "RV-", "TRUE" = "RV+")) +
+  scale_y_continuous(limits = c(-1, 1)) +
+  labs(
+    x = "",
+    y = "Mean PRS",
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.ticks = element_line(linewidth = 2),
+    legend.position = "none",
+    axis.title = element_text(size = 24, face = "bold"),
+    strip.text = element_text(size = 11, face = "bold")
+  ) +
+  geom_text(data = cc.prs.pvals.lbls, aes(label = stars, y = 0.95), x = 2.25, vjust = 1, size = 6, show.legend=F)
+) %>%
+  save.plot('cc.scatter', w = 4.5 * 2, h = 3, root.dir = PLOTS_DIR, sub.dir = 'collider')
+
+cc.scatter
+```
+
+### Control Variants
+
+Show the same for control variants.
+
+```{r control_collider_scatter, eval = F}
+# massage cohort.dfs into a single dataframe containing correctly paired RV/PRS ####
+
+# control variant case+control
+cv.cc.prs.df <- concat.df.list(cv.cohort.dfs, key.cols = 'cohort.name')
+
+# get summary stats for plotting ####
+
+cv.cc.prs.stats.df <- cv.cc.prs.df %>%
+  group_by(cohort.name, rv) %>%
+  summarize(
+    mean.prs = mean(prs),
+    err.prs = sqrt(var(prs)/n())
+  ) %>%
+  ungroup()
+
+# calculate p-values using logistic regression ####
+
+calc.p.val <- function(formula, data) { 
+  summary(
+    glm(formula,
+      data = data,
+      family = binomial(link='logit')
+    )
+  )[[12]][2,4]
+}
+
+cv.cc.prs.pvals.df <- split(cv.cc.prs.df, ~cohort.name) %>%
+  map(function(prs.df) {
+      tryCatch(calc.p.val(rv ~ prs, prs.df), error = default.na)
+  }) %>%
+  unlist() %>%
+  tibble::enframe(name="cohort.name", value="p.val")
+
+cv.cc.prs.pvals.lbls <- cv.cc.prs.pvals.df %>%
+  rowwise() %>%
+  mutate(stars = ifelse(p.val < 0.001, '***', ifelse(p.val < 0.01, '**', ifelse(p.val < 0.05, '*', 'n.s.'))))
+
+cv.cc.prs.pvals.df 
+
+# create plot ####
+
+cv.cc.prs.stats.df$cohort.name <- factor(cv.cc.prs.stats.df$cohort.name, levels = names(cv.cohort.dfs))
+
+cv.cc.prs.pvals.lbls$cohort.name <- factor(cv.cc.prs.pvals.lbls$cohort.name, levels = names(cv.cohort.dfs))
+
+cv.cc.scatter <- (
+  cv.cc.prs.stats.df %>%
+  ggplot(aes(x = as.factor(rv), y = mean.prs, group = cohort.name)) +
+  geom_point(position = position_dodge(width = 0.2), size = 2) +
+  geom_errorbar(
+    aes(ymin = mean.prs - err.prs, ymax = mean.prs + err.prs),
+    position = position_dodge(width = 0.2),
+    width = 0.1
+  ) +
+  geom_line(
+    position = position_dodge(width = 0.2),
+  ) +
+  scale_x_discrete(labels = c("FALSE" = "RV-", "TRUE" = "RV+")) +
+  scale_y_continuous(limits = c(-1, 1)) +
+  facet_wrap(~cohort.name) +
+  labs(
+    x = "",
+    y = "Mean PRS",
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.ticks = element_line(linewidth = 2),
+    legend.position = "none",
+    axis.title = element_text(size = 24, face = "bold"),
+    strip.text = element_text(size = 11, face = "bold")
+  ) +
+  geom_text(data = cv.cc.prs.pvals.lbls, aes(label = stars, y = 0.95), x = 2.25, vjust = 1, size = 6, show.legend=F)
+) %>%
+  save.plot('cv.cc.scatter', w = 4.5 * 2, h = 3, root.dir = PLOTS_DIR, sub.dir = 'collider')
+
+cv.cc.scatter
+```
+
+## Plot collider effect as PRS tertiles bar plot
+
+Visualize the conditional causal collider effect in cases.
+Plot proportion of samples w/ a RV event within each PRS tertile.
+
+Plot is faceted on the three gene groups (columns) with correctly paired cohort/PRS values (rows).
+We expect statistically significant negative association between RV and PRS along
+the diagonal (top-left to bottom-right), where the cohort/PRS is paired with it's causally similar gene.
+
+### Pathogenic Variants
+
+```{r tertiles_plot_calc}
+# massage data w/ prs tertiles ####
+
+# logitG.mle.p.vals <- readRDS(file.path(OUT_DIR, 'logitG.mle.result.rds'))$mle.p.vals
+logitG.mle.p.vals <- data.frame(
+  cohort.name = c('HC190', 'HC190', 'HC190', 'BC', 'BC', 'BC', 'PD', 'PD', 'PD'),
+  gene.grp = c('LDLR', 'BRCA1', 'GBA', 'LDLR', 'BRCA1', 'GBA', 'LDLR', 'BRCA1', 'GBA'),
+  p.val = c(0, 1, 1, 0.03, 0, 1, 0.03, 1, 0)
+)
+
+logitG.mle.p.vals$cohort.name <- factor(logitG.mle.p.vals$cohort.name, levels = c('HC190', 'BC', 'PD'))
+logitG.mle.p.vals$gene.grp <- factor(logitG.mle.p.vals$gene.grp, levels = c('LDLR', 'BRCA1', 'GBA'))
+
+x.cohort.df <- rv.prs.df %>%
+  pivot_longer(
+    cols = all_of(names(cohorts)),
+    names_to = 'cohort',
+    values_to = 'in.cohort'
+  ) %>%
+  filter(in.cohort) %>%
+  pivot_longer(
+    cols = starts_with("PRS"),
+    names_to = "prs.name",
+    values_to = "prs"
+  ) %>%
+  rowwise() %>%
+  filter(prs.name == cohorts[[cohort]]$prs) %>%
+  ungroup() %>%
+  pivot_longer(
+    cols = all_of(names(gene.lkps$grp.to.genes)),
+    names_to = "gene.grp",
+    values_to = "rv"
+  ) %>%
+  # anti_join(gene.excludes.df, by=c('sample.id', 'gene.grp')) %>%
+  # unite(cohort, prs.name, col="cohort", sep='/') %>%
+  select(sample.id, cohort, prs, gene.grp, rv)
+
+n.events.df <- x.cohort.df %>%
+  group_by(cohort, gene.grp) %>%
+  mutate(prs.qnt = calc.quantile(prs, n.qnt = 3, na.rm = T)) %>%
+  ungroup() %>%
+  filter(rv) %>%
+  group_by(gene.grp, cohort, prs.qnt) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  mutate(
+    gene.grp = factor(gene.grp, levels=names(gene.lkps$grp.to.genes)),
+    cohort = factor(cohort, levels=names(cohorts)),
+  )
+
+# grab p.values from LRT
+
+tertiles.p.vals <- expand.grid(cohort = names(cohorts), gene.grp = unlist(gene.lkps$grp.to.genes)) %>%
+  rowwise() %>%
+  left_join(logitG.mle.p.vals, by = c('cohort' = 'cohort.name', 'gene.grp')) %>%
+  mutate(stars = ifelse(p.val < 0.001, '***', ifelse(p.val < 0.01, '**', ifelse(p.val < 0.05, '*', '')))) %>%
+  left_join(
+    n.events.df %>%
+      group_by(cohort) %>%
+      summarize(y = max(n)
+    ), by = c('cohort')
+  )
+
+# calculate p.values via glm
+
+# tertiles.grid <- expand.grid(
+#   cohort.name = names(cohorts),
+#   gene.grp = unlist(gene.lkps$grp.to.genes)
+# )
+# 
+# tertiles.p.vals <- pmap(tertiles.grid, function(cohort.name, gene.grp.name) {
+#   p.val <- tryCatch({
+#     my.data <- x.cohort.df %>%
+#       filter(cohort == cohort.name & gene.grp == gene.grp.name)
+#     glm.test <- broom::tidy(glm(rv ~ prs, data = my.data, family = binomial(link = "logit")))
+#     glm.test[glm.test$term == 'prs',]$p.value
+#   }, error = function(e) NA)
+#   list(
+#     cohort = cohort.name,
+#     gene.grp = gene.grp.name,
+#     p.val = p.val
+#   )
+# }) %>%
+#   do.call(bind_rows, .) %>%
+#   as_tibble() %>%
+#   mutate(stars = ifelse(p.val < 0.001, '***', ifelse(p.val < 0.01, '**', ifelse(p.val < 0.05, '*', '')))) %>%
+#   left_join(
+#     n.events.df %>%
+#       group_by(cohort) %>%
+#       summarize(y = max(n))
+#     , by = c('cohort')
+#   )
+
+# create and save plot ####
+tertiles.3x3 <- (
+  n.events.df %>%
+  ggplot(aes(x = factor(prs.qnt), y = n)) +
+  geom_bar(
+    stat = "identity",
+    color = 'black',
+    fill = 'gray',
+    width = 1,
+    linewidth = 0.35,
+  ) +
+  facet_grid(rows = vars(cohort), cols = vars(gene.grp), scales = "free_y") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+  geom_text(
+    data = tertiles.p.vals, aes(label = stars, y = y),
+    x = 3,
+    vjust = 1,
+    size = 3,
+    show.legend=F
+  ) +
+  labs(
+    x = "PRS Tertile",
+    y = "Num RV+ Samples",
+  ) +
+    theme_bw(base_family="Arial") +
+    theme(
+      panel.grid = element_blank(),
+      axis.text = element_text(size=7, family = "Arial", face = "bold"),
+      axis.title = element_text(size=8, family = "Arial", face = "bold"),
+      axis.ticks = element_line(linewidth = 1),
+      strip.text = element_text(size = 8, family = "Arial", face = "bold"),
+      legend.position = "none",
+    ) +
+    guides(
+      color = guide_legend(order = 1),
+      shape = guide_legend(order = 2),
+      linetype = guide_legend(order = 2)
+    )
+) %>%
+   save.plot('tertiles.3x3', w = 3.75, h = 2.5, root.dir = PLOTS_DIR, sub.dir = 'collider')
+
+tertiles.3x3
+```
+
+### Control Variants
+
+Plot the same for control variants.
+
+```{r control_tertiles_plot_calc}
+# massage data w/ prs tertiles ####
+
+n.cv.events.df <- cv.prs.df %>%
+  pivot_longer(cols = all_of(names(cohorts)), names_to = 'cohort', values_to = 'in.cohort') %>%
+  filter(in.cohort) %>%
+  pivot_longer(cols = starts_with("PRS"), names_to = "prs.name", values_to = "value") %>%
+  rowwise() %>%
+  filter(prs.name == cohorts[[cohort]]$prs) %>%
+  ungroup() %>%
+  pivot_longer(cols = all_of(names(gene.lkps$grp.to.genes)), names_to = "gene.grp", values_to = "rv") %>%
+  # anti_join(gene.excludes.df, by=c('sample.id', 'gene.grp')) %>%
+  # unite(cohort, prs.name, col="cohort", sep='/') %>%
+  select(sample.id, cohort, value, gene.grp, rv) %>%
+  group_by(cohort, gene.grp) %>%
+  mutate(prs.qnt = calc.quantile(value, n.qnt = 3, na.rm = T)) %>%
+  ungroup() %>%
+  filter(rv) %>%
+  group_by(gene.grp, cohort, prs.qnt) %>% summarize(n = n())
+
+y <- expand.grid(cohort.name = names(cv.cohort.dfs), gene.grp = names(gene.lkps$grp.to.genes))
+x <- mapply(function(cohort.name, gene) {
+  a <- cv.prs.df[,c(cohort.name, gene, cohorts[[cohort.name]]$prs)] %>%
+    magrittr::set_colnames(c('cohort', 'rv', 'prs')) %>%
+    filter(cohort == T)
+  p.val <- broom::tidy(glm(rv ~  prs, family = binomial(link = 'logit'), data = a))[2,5] %>% unlist()
+  list(cohort.name = cohort.name, gene = gene, p.val = p.val)
+}, paste(y$cohort.name), paste(y$gene.grp), SIMPLIFY=F) %>%
+  do.call(bind_rows, .)
+
+n.cv.events.df$gene.grp <- factor(n.cv.events.df$gene.grp, levels=names(gene.lkps$grp.to.genes))
+n.cv.events.df$cohort <- factor(n.cv.events.df$cohort, levels=names(cohorts))
+
+# create and save plot ####
+(
+  n.cv.events.df %>%
+  ggplot(aes(x = factor(prs.qnt), y = n)) +
+  geom_bar(
+    stat = "identity",
+    color = 'black',
+    fill = 'gray',
+    width = 1,
+    linewidth = 0.53
+  ) +
+  facet_grid(rows = vars(cohort), cols = vars(gene.grp), scales = "free_y") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.5))) +
+  labs(
+    x = "PRS Tertile",
+    y = "Num RV+ Samples",
+  ) +
+    theme_bw(base_family="Arial") +
+    theme(
+      panel.grid = element_blank(),
+      axis.text = element_text(size=7, family = "Arial", face = "bold"),
+      axis.title = element_text(size=8, family = "Arial", face = "bold"),
+      axis.ticks = element_line(linewidth = 0.53),
+      strip.text = element_text(size = 8, family = "Arial", face = "bold"),
+      legend.position = "none",
+    ) +
+    guides(
+      color = guide_legend(order = 1),
+      shape = guide_legend(order = 2),
+      linetype = guide_legend(order = 2)
+    )
+) %>%
+   save.plot(
+     'supp.fig7',
+     w = 3.34,
+     h = 2.505,
+     root.dir = PLOTS_DIR,
+     sub.dir = 'collider'
+   )
+```
+
+
+### Pathogenic Variants - Age Restricted
+
+```{r tertiles_plot_calc_age}
+# massage data w/ prs tertiles ####
+
+logitG.age.low.mle.p.vals <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))$mle.p.vals
+logitG.age.high.mle.p.vals <- readRDS(file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))$mle.p.vals
+
+a <- rv.prs.df %>%
+  left_join(select(cohort.meta, sample.id, age), by = 'sample.id') %>%
+  filter(PD) %>%
+  mutate(age.half = ntile(age, 2)) %>%
+  select(sample.id, LDLR, PD, age.half) %>%
+  filter(age.half == 1 & LDLR == T)
+
+
+n.tiles <- 2
+prs.tertiles.df <- rv.prs.df %>%
+  left_join(select(cohort.meta, sample.id, age), by = 'sample.id') %>%
+  pivot_longer(cols = all_of(names(cohorts)), names_to = 'cohort', values_to = 'in.cohort') %>%
+  filter(!is.na(in.cohort)) %>%
+  group_by(cohort) %>%
+  mutate(age.ntile = ntile(age, n.tiles)) %>%
+  ungroup() %>%
+  filter(in.cohort) %>%
+  pivot_longer(cols = starts_with("PRS"), names_to = "prs.name", values_to = "value") %>%
+  rowwise() %>%
+  filter(prs.name == cohorts[[cohort]]$prs) %>%
+  ungroup() %>%
+  pivot_longer(cols = all_of(names(gene.lkps$grp.to.genes)), names_to = "gene.grp", values_to = "rv") %>%
+  # anti_join(gene.excludes.df, by=c('sample.id', 'gene.grp')) %>%
+  # unite(cohort, prs.name, col="cohort", sep='/') %>%
+  select(sample.id, cohort, age.ntile, value, gene.grp, rv) %>%
+  group_by(cohort, gene.grp, age.ntile) %>%
+  mutate(prs.qnt = calc.quantile(value, n.qnt = 3, na.rm = T)) %>%
+  ungroup()
+
+n.events.df <- prs.tertiles.df %>%
+  filter(rv) %>%
+  group_by(gene.grp, cohort, age.ntile, prs.qnt) %>%
+  summarize(n = n())
+
+# grab p.values from LRT
+
+age.tertiles.grid <- expand.grid(
+  my.cohort.name = names(cohorts),
+  gene.grp = unlist(gene.lkps$grp.to.genes),
+  age.n.tile = seq(n.tiles)
+)
+
+tertiles.p.vals <- pmap(age.tertiles.grid, function(my.cohort.name, gene.grp.name, age.n.tile) {
+  if (age.n.tile == 1) {
+    p.val <- filter(logitG.age.low.mle.p.vals, cohort.name == my.cohort.name & gene.grp == gene.grp.name)$p.val
+  } else {
+    p.val <- filter(logitG.age.high.mle.p.vals, cohort.name == my.cohort.name & gene.grp == gene.grp.name)$p.val
+  }
+  list(
+    cohort = my.cohort.name,
+    gene.grp = gene.grp.name,
+    age.ntile = age.n.tile,
+    p.val = if (length(p.val) == 1) { p.val[1] } else { NA }
+  )
+}) %>%
+  do.call(bind_rows, .) %>%
+  as_tibble() %>%
+  rowwise() %>%
+  mutate(stars = p.val.stars(p.val, n.s = '')) %>%
+  ungroup() %>%
+  left_join(
+    n.events.df %>%
+      group_by(cohort, age.ntile) %>%
+      summarize(y = max(n))
+    , by = c('cohort', 'age.ntile')
+  )
+
+age.tertiles.p.val <- list()
+
+age.tertiles.3x3 <- list()
+# create and save plot ####
+for (age.n.tile in seq(n.tiles)) {
+  age.n.tile.events.df <- n.events.df %>%
+    filter(age.ntile == age.n.tile)
+  age.n.tile.p.vals <- tertiles.p.vals %>%
+    filter(age.ntile == age.n.tile)
+  
+  age.n.tile.events.df$gene.grp <- factor(age.n.tile.events.df$gene.grp, levels=names(gene.lkps$grp.to.genes))
+  age.n.tile.events.df$cohort <- factor(age.n.tile.events.df$cohort, levels=names(cohorts))
+  
+  age.n.tile.p.vals$gene.grp <- factor(age.n.tile.p.vals$gene.grp, levels=names(gene.lkps$grp.to.genes))
+  age.n.tile.p.vals$cohort <- factor(age.n.tile.p.vals$cohort, levels=names(cohorts))
+
+  
+  age.tertiles.3x3[[age.n.tile]] <- age.n.tile.events.df %>%
+    ggplot(aes(x = factor(prs.qnt), y = n)) +
+    geom_bar(
+      stat = "identity",
+      color = 'black',
+      fill = 'gray',
+      width = 1
+    ) +
+    facet_grid(rows = vars(cohort), cols = vars(gene.grp), scales = "free_y") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.5))) +
+    geom_text(data = age.n.tile.p.vals, aes(label = stars, y = y), x = 2.6, vjust = -1/3, size = 4, show.legend=F) +
+    theme_bw(base_family="Arial") +
+    theme(
+      panel.grid = element_blank(),
+      axis.text = element_text(size=7, family = "Arial", face = "bold"),
+      axis.title = element_text(size=8, family = "Arial", face = "bold"),
+      axis.ticks = element_line(linewidth = 0.53),
+      strip.text = element_text(size = 8, family = "Arial", face = "bold"),
+      legend.position = "none",
+    ) +
+    labs(
+      x = "PRS Tertile",
+      y = "Num RV+ Samples",
+      # subtitle = paste('Age nTile:', age.n.tile)
+    )
+}
+
+(
+  (
+    age.tertiles.3x3[[1]] + age.tertiles.3x3[[2]]
+  )
+  +
+    plot_annotation(tag_levels = 'A', tag_suffix = ')')
+) %>%
+   save.plot(
+     'age.3x3.tertiles',
+     root.dir = PLOTS_DIR,
+     sub.dir = 'collider',
+     w = 6.5,
+     h = 6.5*9/16
+    )
+
+
+# There a number of possibilities here:
+# 
+#     Fewer pathogenic RV in older samples – attrition by reduced survival?
+#     Reduced effect size of PRS in older people – diluted by non-genetic factors
+#     Reduced effect size of RV in older people – suppressor variants either within the same locus or at alternative interacting loci
+```
+
+## Compose UKBB Collider Summary Plot
+
+```{r collider_summary_plot}
+# panel.a <- cc.scatter + composed.theme + scale_y_continuous(limits = c(-1, 1), breaks = c(-1, 0, 1))
+panel.a <- tertiles.3x3
+panel.b <- mt.dist + 
+  theme(
+    axis.title = element_text(face = 'bold', size = 8),
+    axis.text = element_text(face = 'bold', size = 7),
+    strip.text = element_text(face = 'bold', size = 8),
+    legend.title = element_text(size = 8),
+    legend.position = 'bottom',
+    legend.box = 'horizontal',
+    legend.text = element_text(size = 7),
+    legend.key.width = unit(0.25, 'cm')
+  ) +
+  guides(
+    fill = guide_legend(title.position = "top", nrow = 1)
+  )
+
+p.stars.grob <- grid::textGrob(
+  expression(
+    atop(
+      "*** " * p < 1 %*% 10^-5,
+      "* " * p < 0.05
+    )
+  ),
+  x = 0,
+  y = 0,
+  hjust = 0,
+  vjust = 0,
+  just = "left",
+  gp = grid::gpar(fontsize = 8, fontface = "bold", family = "Arial")
+)
+
+(
+  (
+    (
+      (panel.a + theme(plot.tag = element_text(margin = margin(0, -10, 0, 0)))) | 
+      (panel.b + theme(plot.tag = element_text(margin = margin(0, -10, 0, 0))))
+    ) + plot_layout(widths = c(7,6))
+  ) /
+    guide_area() +
+    plot_layout(heights = c(6, 1)) +
+    plot_annotation(tag_levels = 'A', tag_suffix = ')') +
+    plot_layout(guides = 'collect') +
+    inset_element(
+      p.stars.grob,
+      left = -0.05,
+      bottom = 0.6,
+      right = 0,
+      top = 0,
+      ignore_tag = T
+    )
+) %>%
+  save.plot(
+    'fig3',
+    root.dir = PLOTS_DIR,
+    sub.dir = 'composed',
+    w = 6.5,
+    h = 4.5
+  )
+```
+

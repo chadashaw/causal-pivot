@@ -1,0 +1,612 @@
+---
+title: "Causal Pivot Setup"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup_deps, include=F}
+# library(dplyr, quietly = T, warn.conflicts = F)
+# library(tidyr, quietly = T, warn.conflicts = F)
+# library(Matrix, quietly = T, warn.conflicts = F)
+source("./utils/main.R")
+source("./utils/data.R")
+```
+
+
+# Setup
+
+## Initialize Data and Constants
+
+**NOTE:** this can take a while...
+
+Initialize analytic products from variant extraction workflow.
+See [init.R](./init.R) for initial data transforms.
+This creates multiple data objects and saves them in the
+configured `SRC_DATA_DIR`:
+
+ - `cohort.meta.rds`: metadata for European UKB samples from the RAP cohort browser
+ - `annotations.rds`: variant annotations from open-cravat
+ - `geno.mtx.rds`: genotypes as a sparse `dgCMatrix` matrix
+ 
+The analysis will re-use pre-existing exist files if they exist.
+To run an analysis from a new set of objects,
+set a new `SRC_DATA_DIR` or delete the files.
+
+```{r init_data, include=F}
+main.objects <- c('cohort.meta', 'annotations', 'geno.mtx') 
+
+# get path to main data rds object (e.g. geno.mtx.rds -> geno.mtx)
+obj.file.path <- function(obj) {
+  file.path(DATA_DIR, paste0(obj, '.rds'))
+}
+
+# if any main object data files are missing, run the init script ####
+if (any(!sapply(main.objects, function(obj) file.exists(obj.file.path(obj))))) {
+  local({
+    source("init.R")
+  })
+}
+
+# read our objects into memory
+for (obj in main.objects) {
+  assign(obj, readRDS(obj.file.path(obj)))
+}
+```
+
+## Load PRS
+
+Load PRS scores.
+Samples missing PRS data are excluded.
+
+```{r read_prs}
+# load and format prs data ####
+
+# our main PRS source is the UKB, but we want to be able to use others
+# if there's a run in the proper format - from pgsc_calc - map the names below
+# and specify PRS_SOURCE
+if (is.null(PRS_SOURCE) || is_empty(PRS_SOURCE)) {
+  prs.name.map <- list(
+    "Standard PRS for low density lipoprotein cholesterol (LDL_SF)" = "PRS_Hypercholesterol"
+    ,"Standard PRS for breast cancer (BC)" = "PRS_Breast_Cancer"
+    ,"Standard PRS for parkinson's disease (PD)" = "PRS_Parkinsons"
+  )
+  
+  prs <- cohort.meta %>%
+    filter(!if_any(all_of(names(prs.name.map)), is.na)) %>%
+    select(
+      sample.id,
+      all_of(names(prs.name.map))
+    ) %>%
+    rename_with(~ unlist(prs.name.map), all_of(names(prs.name.map)))
+} else {
+  pgs.name.map <- list(
+    "PGS003037_hmPOS_GRCh38" = "PRS_Hypercholesterol"
+   ,"PGS004737_hmPOS_GRCh38" = "PRS_Breast_Cancer"
+   ,"PGS000903_hmPOS_GRCh38" = "PRS_Parkinsons"
+  )
+  library(data.table)
+  prs <- fread(PRS_SOURCE) %>%
+    select(FID, IID, PGS, SUM) %>%
+    pivot_wider(id_cols = c('FID', 'IID'), names_from="PGS", values_from="SUM") %>%
+    mutate(
+      sample.id = paste(FID, IID, sep='_'),
+    ) %>%
+    rename_with(~ unlist(pgs.name.map), all_of(names(pgs.name.map))) %>%
+    select(sample.id, starts_with('PRS'))
+}
+
+# normalize prs distributions to mean = 0 and sd = 1 ####
+
+prs <- prs %>%
+  mutate(across(starts_with('PRS'), ~ (. - mean(.)) / sd(.)))
+
+# remove samples from cohort w/ no PRS ####
+
+cohort.meta <- cohort.meta[na.omit(match(prs$sample.id, cohort.meta$sample.id)),]
+
+# display and save PRS densities plot ####
+
+(
+  prs %>%
+  mutate(across(starts_with('PRS'), ~ (. - mean(.)) / sd(.))) %>%
+  pivot_longer(cols = starts_with('PRS'), names_to = 'PRS', values_to = 'score') %>%
+  mutate(
+    PRS = gsub('PRS_', '', PRS),
+    PRS = case_when(
+      PRS == 'Hypercholesterol' ~ 'HC',
+      PRS == 'Breast_Cancer' ~ 'BC',
+      PRS == 'Parkinsons' ~ 'PD',
+      .default = NA
+    ),
+    PRS = factor(PRS, levels = c('HC', 'BC', 'PD'))
+  ) %>%
+  ggplot(aes(x = score, col = PRS)) +
+  geom_density(key_glyph = draw_key_path, linewidth = 0.53) +
+  labs(x = 'PRS Score', y = 'Density') +
+  theme_bw(base_family="Arial") +
+  theme(
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
+    panel.grid.minor = element_line(color = "grey90", linewidth = 0.25),
+    axis.text = element_text(size=8),
+    axis.title = element_text(size=8, family = "Arial", face = "bold"),
+    legend.text = element_text(size=6),
+    legend.title = element_text(size=8),
+    legend.position = 'bottom'
+  )
+) %>%
+  save.plot(
+    'supp.fig4',
+    root.dir = PLOTS_DIR,
+    sub.dir = 'supplementary',
+    w = 3.34,
+    h = 3.34
+  )
+```
+
+## Load LSD Genes
+
+```{r}
+# load gene list for Parkinson's LSD genetic burden analysis
+lsd.genes <- readLines(file.path(SRC_DATA_DIR, 'LSD_human_genes.txt'))
+```
+
+## Define Cohorts
+
+Define relationships between cohorts, genes and PRS scores
+and helper objects for later data manipulation.
+
+Disease cohorts contain:
+
+ - gene(s) of interest
+ - name of column in `prs` data-frame for corresponding disease PRS
+ - case/control cohort inclusion function
+ - cohort exclusion function
+
+```{r define_cohorts}
+# define global cohorts list ####
+
+cohorts <- list(
+  "HC190" = list(
+    "gene.grp" = 'LDLR',
+    "genes" = c('LDLR'),
+    "prs" = "PRS_Hypercholesterol",
+    "in.cohort" = function(cohort.meta) {
+      high.ldl <- cohort.meta$ldl.inst.0 > 4.9
+      !is.na(high.ldl) & high.ldl
+    },
+    "exclude" = function(cohort.meta) {
+      is.na(cohort.meta$ldl.inst.0)
+    }
+  ),
+  "BC" = list(
+    "gene.grp" = 'BRCA1',
+    "genes" = c('BRCA1'),
+    "prs" = "PRS_Breast_Cancer",
+    "in.cohort" = function(cohort.meta) {
+      bc.inst.0 <- cohort.meta$bc.inst.0
+      bc.inst.1 <- cohort.meta$bc.inst.1
+      ((!is.na(bc.inst.0) & bc.inst.0) |  (!is.na(bc.inst.1) & bc.inst.1))
+    },
+    "exclude" = function(cohort.meta) {
+      cohort.meta$sex != 'F'
+    }
+  ),
+  "PD" = list(
+    "gene.grp" = 'GBA',
+    "genes" = c('GBA'),
+    "prs" = "PRS_Parkinsons",
+    "in.cohort" = function(cohort.meta) {
+      !is.na(cohort.meta$pd.rep.date)
+    }
+  )
+) %>%
+lapply(function(cohort) {
+  if (!is.null(cohort$exclude)) {
+    cohort.meta <- cohort.meta[!cohort$exclude(cohort.meta),]
+  }
+  cohort$labels <- set_names(cohort$in.cohort(cohort.meta), cohort.meta$sample.id)
+  cohort
+})
+
+# remove samples in multiple cohorts ####
+
+# create dataframe flagging samples for inclusion in our separate cohorts
+cohort.flags <- purrr::map(cohorts, ~.$labels[cohort.meta$sample.id]) %>%
+  as.data.frame() %>%
+  # mutate(across(everything(), ~ifelse(is.na(.), F, .))) %>%
+  filter(rowSums(across(everything()), na.rm = T) < 2)
+
+# update cohort labels to exclude multi-cohort samples
+for (cohort.name in names(cohorts)) {
+  cohort <- cohorts[[cohort.name]]
+  cohort$labels <- cohort$labels[which(names(cohort$labels) %in% rownames(cohort.flags))]
+  cohorts[[cohort.name]] <- cohort
+}
+
+cohort.lkps <- list(
+  # map cohort names to gene group labels
+  prs = unlist(map(cohorts, ~.$prs)),
+  # map cohort names to gene group labels
+  gene.grp = unlist(map(cohorts, ~.$gene.grp))
+)
+
+gene.lkps <- list(
+  # map gene groups to vector of gene labels
+  # old gene.lkps$grp.to.genes
+  grp.to.genes = set_names(map(cohorts, ~.$genes), cohort.lkps$gene.grp),
+  # map gene label to its gene group
+  # old gene.lkps$gene.to.grp
+  gene.to.grp = lapply(cohorts, function(cohort) {
+    map(cohort$genes, function(x) cohort$gene.grp) %>% setNames(cohort$genes)
+  }) %>%
+    setNames(NULL) %>%
+    unlist()
+)
+
+# vector mapping sample name to cohort
+cohort.marks <- names(cohorts) %>%
+  sapply(function(cohort) {
+    rownames(cohort.flags[which(cohort.flags[[cohort]]),]) %>%
+      setNames(rep_along(., cohort), .)
+  }) %>%
+  unname %>%
+  unlist
+
+# print cohort counts ####
+cat('Num. Samples per Cohort:\n')
+table(cohort.marks)
+```
+
+## Classify Pathogenic Variants
+
+Classify pathogenic markers via conservative heuristics
+applied to ClinVar, gnomAD and sequence ontology annotations.
+
+A variant is "pathogenic" if it is classified as Clinvar Pathogenic OR a rare
+stopgain OR rare frameshift event.
+
+"Rare" defined by gnomAD v3 non-Finnish European allele frequency lt. cutoff.
+
+A Clinvar Pathogenic annotation is defined as containing:
+
+  - a "Pathogenic" significance `Pathogenic`, `Likely_pathogenic`, `Pathogenic/Likely_pathogenic`, etc.
+  - AND
+  - NOT a `Conflicting_interpretations_of_pathogenicity` significance
+  - AND
+  - NOT a "qualified" significance (e.g. `Pathogenic|drug_response`)
+  
+Examples:
+
+ - `Pathogenic/Likely_pathogenic` => pathogenic
+ - `Conflicting_interpretations_of_pathogenicity` => NOT pathogenic
+ - `Pathogenic/Likely_pathogenic|risk_factor` => NOT pathogenic
+
+See [variant.classifiers.R](./utils/variant.classifiers.R) for filter functions.
+
+```{r classify_pathogenic_variants}
+# flag pathogenic variants in genes of interest ####
+
+rv.flags <- local({
+  source("utils/variant.classifiers.R")
+  
+  # run heuristics
+  annotations %>%
+    # NOTE TO SELF: the LSD genes need to be controlled for ancestry association as well
+    # but adding them here includes them in the rv.flags object which the rest of the code
+    # does not expect - figure it out
+    # filter(gene %in% c(unlist(gene.lkps$grp.to.genes), lsd.genes)) %>%
+    filter(gene %in% unlist(gene.lkps$grp.to.genes)) %>%
+    classify.clinvar() %>%
+    classify.lof() %>%
+    classify.synonymous() %>%
+    classify.missense() %>%
+    mutate(
+      af = ifelse(is.na(gnomad3.af_nfe), 0, gnomad3.af_nfe),
+      class.rare = af < gnomad.cutoff,
+      # class.rare = gnomad3.af_nfe < gnomad.cutoff
+    ) %>%
+    class.na.false() %>%
+    mutate(
+      class.positive = class.clinvar.pathogenic | (class.rare & class.loss.of.function),
+      class.rare.synonymous = class.rare & class.synonymous,
+      class.rare.missense = class.rare & class.missense,
+    ) %>%
+    select(
+      marker.id,
+      gene,
+      starts_with('class'),
+      # class.positive,
+      # class.rare.synonymous,
+      # class.rare.missense,
+    )
+})
+```
+
+## Flag markers strongly correlated w/ PRS
+
+Show that the causal factors are independent.
+
+Flag markers for exclusion using logistic regression
+to identify markers that significantly correlate with associated PRS.
+
+Previously processed variants are cached to improve iterative/cumulative analysis.
+Delete or modify cached object to re-process variants.
+
+```{r mark_markers_cor_w_PRS}
+# read from cached RDS file if it exists ####
+
+MARKER_PRS_CORS_RDS <- file.path(DATA_DIR, "marker.prs.cors.df.rds")
+
+if (file.exists(MARKER_PRS_CORS_RDS)) {
+  marker.prs.cors <- readRDS(MARKER_PRS_CORS_RDS)
+} else {
+  marker.prs.cors <- list()
+}
+
+# calculate marker/PRS associations based on cohort gene/PRS combos ####
+
+for (cohort.name in names(cohorts)) {
+  cohort <- cohorts[[cohort.name]]
+  
+  if (cohort.name == 'PD') {
+    # we want to associate the LSD pathway genes with Parkinsons PRS
+    # for genetic burden analysis
+    cohort.marker.ids <-
+      rv.flags[
+        rv.flags$gene %in% cohort$genes |
+          (
+            (rv.flags$class.positive | rv.flags$class.rare.synonymous) &
+             rv.flags$gene %in% lsd.genes
+          ),
+      ]$marker.id
+  } else {
+    cohort.marker.ids <- rv.flags[rv.flags$gene %in% cohort$genes,]$marker.id
+  }
+  
+  # filter variants in genes of interest that we've already processed
+  if (!is.null(marker.prs.cors[[cohort.name]])) {
+    cohort.marker.ids <-
+      setdiff(cohort.marker.ids, marker.prs.cors[[cohort.name]]$marker.id)
+    if (length(cohort.marker.ids) == 0) {
+      next
+    }
+  }
+  
+  # create logical vector for training
+  cohort.marker.events <- geno.mtx[, cohort.marker.ids] > 0
+  
+  # calculate association b/w markers and their respective cohort PRS
+  prs.vals <- prs[match(names(cohort$labels), prs$sample.id),][[cohort$prs]]
+  
+  n <- length(cohort.marker.ids)
+  pb <- txtProgressBar(min = 0, max = n, style = 3)
+  
+  process.marker <- function(marker.id, i) {
+    events <- cohort.marker.events[
+      match(names(cohort$labels), rownames(cohort.marker.events)),
+      marker.id
+    ]
+    data <- data.frame(event = events, prs = prs.vals)
+    
+    my.fit <-
+      suppressWarnings(glm(
+        event ~ prs,
+        family = binomial(link = 'logit'),
+        data = data
+      ))
+    fit.coefs <- coef(summary(my.fit))
+    
+    setTxtProgressBar(pb, i)
+    cat(sprintf(" [%d/%d]\r", i, n)) 
+    
+    c('marker.id' = marker.id,
+      'cor' = fit.coefs[2, ][['Estimate']],
+      'p.val' = fit.coefs[2, ][['Pr(>|z|)']])
+  }
+  
+  prs.cors <- purrr::imap(cohort.marker.ids, process.marker) %>%
+    do.call(rbind, .) %>%
+    as_tibble()
+  
+  cat("\n")
+  
+  marker.prs.cors[[cohort.name]] <-
+    rbind(marker.prs.cors[[cohort.name]], prs.cors)
+}
+
+# flag markers with significant association w/ corresponding PRS ####
+
+prs.sig.marker.ids <- concat.df.list(marker.prs.cors, key.cols = 'cohort') %>%
+  mutate(p.val = as.numeric(format(p.val, scientific = F))) %>%
+  filter(p.val < 0.05) %>%
+  pull(marker.id) %>%
+  unique()
+
+# cache result ####
+saveRDS(marker.prs.cors, MARKER_PRS_CORS_RDS)
+saveRDS(prs.sig.marker.ids, file.path(DATA_DIR, 'prs.sig.marker.ids.rds'))
+
+# print results ####
+
+cat("# Pathogenic Markers w/ Sig. PRS. Assoc. per Gene\n")
+table(gene.lkps$gene.to.grp[rv.flags[rv.flags$marker.id %in% prs.sig.marker.ids & rv.flags$class.positive,]$gene])
+
+cat("# Control Markers w/ Sig. PRS. Assoc. per Gene\n")
+table(gene.lkps$gene.to.grp[rv.flags[rv.flags$marker.id %in% prs.sig.marker.ids & rv.flags$class.rare.synonymous,]$gene])
+
+# flag pathogenic markers - class.positive & !prs.associated ####
+
+rv.flags$pathogenic <- rv.flags$class.positive &
+  !(rv.flags$marker.id %in% prs.sig.marker.ids)
+  
+# flag control markers - class.rare.synonymous & !prs.associated ####
+
+rv.flags$control <- rv.flags$class.rare.synonymous &
+  !(rv.flags$marker.id %in% prs.sig.marker.ids)
+```
+
+## Create genomic event matrices
+
+### Positive (rare pathogenic) markers
+
+Create Rare Variant (`RV`) "event" matrix
+counting pathogenic variants per gene.
+
+```{r, create_positive_events_matrix}
+# create named vector of gene groups - labels are marker.ids ####
+
+rv.gene.marks <- rv.flags %>%
+  filter(pathogenic) %>%
+  select(marker.id, gene) %>%
+  rowwise() %>%
+  mutate(gene.grp = gene.lkps$gene.to.grp[[gene]]) %>%
+  ungroup() %>%
+  with(setNames(gene.grp, marker.id))
+  
+# subset geno.mtx w/ only rare pathogenic events ####
+
+rv.mtx <- geno.mtx[,match(names(rv.gene.marks), colnames(geno.mtx))]
+
+# count pathogenic rare variant events per gene, per sample ####
+gene.rv.events <- alt.sums.by.var(rv.mtx, rv.gene.marks)
+```
+
+
+### Control (rare synonymous) markers
+
+Create Control Variant (`CV`) event matrix.
+
+```{r, create_control_events_matrix}
+# create named vector of gene groups - labels are marker.ids ####
+
+cv.gene.marks <- rv.flags %>%
+  filter(control) %>%
+  select(marker.id, gene) %>%
+  rowwise() %>%
+  mutate(gene.grp = gene.lkps$gene.to.grp[[gene]]) %>%
+  ungroup() %>%
+  with(setNames(gene.grp, marker.id))
+  
+# subset geno.mtx w/ only rare pathogenic events ####
+
+cv.mtx <- geno.mtx[,match(names(cv.gene.marks), colnames(geno.mtx))]
+
+# count pathogenic rare variant events per gene, per sample ####
+
+gene.cv.events <- alt.sums.by.var(cv.mtx, cv.gene.marks)
+```
+
+## Create master dataframe & cohort data frames
+
+Collate variables into "master" dataframe
+and a cohort-specific list of dataframes.
+These two objects are the primary analysis inputs.
+
+The master dataframe contains one row per sample for ALL samples and include:
+
+  - cohort inclusion flags for all three cohorts
+  - gene rare variant flags for all three genes
+  - values for all three PRS
+
+The dataframes in the list contain ONLY samples in each cohort and include:
+
+ - `sample.id`
+ - `case`: disease flag (case/control flag) - forward model response variable
+ - `rv`: pathogenic rare variant event flag
+ - `prs`
+ 
+Note: Columns `case`, `rv`, and `prs` correspond to variables `Y`, `G`, and `X`
+respectively in the causal pivot model.
+
+### Pathogenic Variants
+
+```{r create_cohort_data_frames}
+# mutate rare variant event counts into binary (>0) variable ####
+
+events.df <- as.data.frame(as.matrix(gene.rv.events > 0))
+
+# join cohort status, event status and prs data into one data frame ####
+
+rv.prs.df <- bind_cols(
+    cohort.flags,
+    events.df[match(rownames(cohort.flags), rownames(events.df)),]
+  ) %>%
+  mutate(sample.id = rownames(.)) %>%
+  inner_join(prs, by = 'sample.id') %>%
+  select(sample.id, everything()) %>%
+  as_tibble()
+
+# rv.prs.df[!is.na(rv.prs.df$HC190),]$PRS_Hypercholesterol <- lm(PRS_Hypercholesterol ~ LDLR, data = rv.prs.df[!is.na(rv.prs.df$HC190),])$residuals
+
+# create cohort dataframes list ####
+
+cohort.dfs <- purrr::imap(cohorts, function(cohort, cohort.name) {
+  rv.prs.df[
+    match(names(cohort$labels), rv.prs.df$sample.id),
+    c('sample.id', cohort.name, cohort$gene.grp, cohort$prs)
+  ] %>%
+    magrittr::set_colnames(c('sample.id', 'case', 'rv', 'prs')) %>%
+    left_join(select(cohort.meta, sample.id, age), by = 'sample.id')
+})
+
+# residualize HC prs from LDLR
+# cohort.dfs$HC190$prs <- lm(prs ~ rv, data = cohort.dfs$HC190)$residuals
+```
+
+### Control Variants
+
+Re-create the primary analysis objects w/ the control variants.
+
+```{r create_controls_data_frames}
+# mutate rare variant event counts into binary (>0) variable ####
+
+events.cv.df <- as.data.frame(as.matrix(gene.cv.events > 0))
+
+# join cohort status, event status and prs data into one data frame ####
+
+cv.prs.df <- bind_cols(
+    cohort.flags,
+    events.cv.df[match(rownames(cohort.flags), rownames(events.cv.df)),]
+  ) %>%
+  mutate(sample.id = rownames(.)) %>%
+  inner_join(prs, by = 'sample.id') %>%
+  select(sample.id, everything()) %>%
+  as_tibble()
+
+# create cohort dataframes list ####
+
+cv.cohort.dfs <- purrr::imap(cohorts, function(cohort, cohort.name) {
+  cv.prs.df[
+    match(names(cohort$labels), cv.prs.df$sample.id),
+    c('sample.id', cohort.name, cohort$gene.grp, cohort$prs)
+  ] %>%
+    magrittr::set_colnames(c('sample.id', 'case', 'rv', 'prs')) %>%
+    left_join(select(cohort.meta, sample.id, age), by = 'sample.id')
+})
+```
+
+### Save Results
+
+```{r}
+# save results ####
+saveRDS(cohorts, file = file.path(DATA_DIR, 'cohorts.rds'))
+saveRDS(cohort.lkps, file = file.path(DATA_DIR, 'cohort.lkps.rds'))
+saveRDS(gene.lkps, file = file.path(DATA_DIR, 'gene.lkps.rds'))
+saveRDS(cohort.marks, file = file.path(DATA_DIR, 'cohort.marks.rds'))
+saveRDS(rv.mtx, file = file.path(DATA_DIR, 'rv.mtx.rds'))
+saveRDS(cv.mtx, file = file.path(DATA_DIR, 'cv.mtx.rds'))
+
+saveRDS(prs, file = file.path(OUT_DIR, 'prs.rds'))
+saveRDS(rv.flags, file = file.path(OUT_DIR, 'rv.flags.rds'))
+saveRDS(rv.prs.df, file = file.path(OUT_DIR, 'rv.prs.df.rds'))
+saveRDS(cohort.dfs, file = file.path(OUT_DIR, 'cohort.dfs.rds'))
+saveRDS(cv.prs.df, file = file.path(OUT_DIR, 'cv.prs.df.rds'))
+saveRDS(cv.cohort.dfs, file = file.path(OUT_DIR, 'cv.cohort.dfs.rds'))
+```
+

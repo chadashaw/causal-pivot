@@ -1,0 +1,512 @@
+---
+title: "lrt"
+date: "`r format(sys.time(), '%d %b, %y, %h:%m')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+---
+
+```{r lrt_deps, include=f}
+library(paletteer, quietly = t, warn.conflicts = f)
+library(waffle, quietly = t, warn.conflicts = f)
+library(patchwork, quietly = t, warn.conflicts = f)
+source("utils/main.R")
+source("utils/data.R")
+source("utils/lrt.R")
+
+cohorts <- readRDS(file.path(DATA_DIR, 'cohorts.rds'))
+cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
+gene.lkps <- readRDS(file.path(DATA_DIR, 'gene.lkps.rds'))
+
+cohort.dfs <- readRDS(file.path(OUT_DIR, 'cohort.dfs.rds'))
+rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
+```
+
+
+the causal pivot maximum likelihood estimation (mle) procedure is applied
+to estimate gamma (the coefficient for g) and eta (the coefficient for x * g)
+of the reverse logistic model. a chi-squared test statistic is calculated
+from the resulting maximum log likelihood ratio (lr). empirical data and logistic regression
+is used to derive estimates for model parameters.
+
+mle is performed via `optim()` using the build-in `sann` simulated
+annealing algorithm. in order to correct for variability found in some areas of
+the parameter space, mle is performed multiple times and the
+median result is used. 
+
+afterwards permutation analysis of the mle statistic under g (the
+response variable in the reverse model) is performed.
+the final test statistic is a simple permutation z-statistic
+using the lr.
+
+lower permutation count reduces computation time,
+but increases variability of results.
+
+at least 256 permutations recommended for consistent results.
+
+```{r, echo=f}
+if(!exists("n.mle.perms")) n.mle.perms <- 32
+writeLines(paste0("n.mle.perms=", n.mle.perms), con = file.path(OUT_DIR, "n.mle.perms"))
+```
+
+## define helper functions
+
+```{r define_lrt_helpers}
+make.lrt.data <- function(rv.prs.df, cohort.df, gene.grp) {
+  g.df <- rv.prs.df[c('sample.id', gene.grp)] %>%
+    magrittr::set_colnames(c('sample.id', 'g'))
+  cohort.df %>%
+    left_join(g.df, by = 'sample.id') %>%
+    mutate(
+      Y = as.integer(case),
+      G = as.integer(g),
+      age.mean = mean(age),
+      age.sd = sd(age),
+      A = (age - age.mean) / age.sd,
+      X = prs
+    ) %>%
+    select(sample.id, Y, X, G, A)
+}
+
+# run the lrt, wilcoxon and z tests for given parameters
+run.lrt.tests <- function(lrt.data, params, lrt.equations, n.perms) {
+  # calculate mle w/ some jitter (internal to run.lrt) to avoid extreme results
+  mle.runs <- lapply(seq(16), function(i) {
+    unlist(run.lrt(as.list(lrt.data), params, lrt.equations))
+  }) %>% bind_rows()
+  
+  mle.run <- list(
+    gamma = median(mle.runs$gamma),
+    eta = median(mle.runs$eta),
+    lr = median(mle.runs$lr),
+    p.val = median(mle.runs$p.val)
+  )
+  
+  fisher.information <- f.call(
+    lrt.equations$fisher.info,
+    params %>%
+      modifyList(mle.run) %>%
+      modifyList(lrt.data)
+  )
+  
+  # calculate permutation distribution of mle results under g
+  # the filter removes extreme estimates
+  mle.perm <- lapply(seq(n.mle.perms), function(i) {
+    run.lrt(as.list(mutate(lrt.data, G = sample(G))), params, lrt.equations)
+  }) %>%
+    do.call(bind_rows, .) %>%
+    as.data.frame() %>%
+    filter(
+      eta > quantile(eta, 0.25) - 2 * IQR(eta),
+      eta < quantile(eta, 0.75) + 2 * IQR(eta),
+      gamma > quantile(gamma, 0.25) - 2 * IQR(gamma),
+      gamma < quantile(gamma, 0.75) + 2 * IQR(gamma),
+    )
+  
+  list(
+    mle.run = mle.run,
+    fisher.information = fisher.information,
+    mle.perm = mle.perm
+  )
+}
+
+postprocess.lrt.run <- function(lrt.run) {
+  lrt.result <- c('params', 'z.result', 'wilcox.result', 'mle.target', 'mle.run', 'mle.perm') %>%
+  purrr::set_names(.) %>%
+  purrr::map(function(leaf.key) {
+    leaf <- extract.leaf(lrt.run, leaf.key)
+    tryCatch({
+      concat.df.list(leaf, key.cols = c('cohort.name', 'gene.grp')) %>%
+        mutate(
+          cohort.name = factor(cohort.name, levels = names(cohorts)),
+          gene.grp = factor(gene.grp, levels = cohort.lkps$gene.grp)
+        )
+    }, error = function(msg) {
+      warning("failure extracting leaf from lrt run")
+      return(NULL)
+    })
+  })
+
+  lrt.result$fisher.information <- extract.leaf(lrt.run, 'fisher.information')  
+  
+  # calculate proportion of fisher information in cases
+  lrt.result$conf.int <- lrt.result$fisher.information %>%
+    purrr::imap(function(a, cohort.name) {
+      a %>%
+        purrr::imap(function(b, gene.grp) {
+          if (is.null(b)) return(data.frame())
+          x <- solve(b$I1 * b$n1 + b$I2 * b$n2)
+          y <- lrt.result$mle.run[
+            lrt.result$mle.run$cohort.name == cohort.name &
+              lrt.result$mle.run$gene.grp == gene.grp,]
+          data.frame(
+            gamma.low = y$gamma + qnorm(0.025, sd = sqrt(x[1,1])),
+            gamma = y$gamma,
+            gamma.high = y$gamma + qnorm(1 - 0.025, sd = sqrt(x[1,1])),
+            eta.low = y$eta + qnorm(0.025, sd = sqrt(x[2,2])),
+            eta = y$eta,
+            eta.high = y$eta + qnorm(1 - 0.025, sd = sqrt(x[2,2]))
+          )
+        })
+    }) %>%
+    concat.df.list(key.cols = c('cohort.name', 'gene.grp'))
+  
+  # calculate the 95th quantile of the lr permutation distribution
+  lrt.result$perm.q95 <- lrt.result$mle.perm %>%
+    group_by(cohort.name, gene.grp) %>%
+    summarize(lr = q.95 <- quantile(lr, 0.95))
+  
+  # calculate p.values for the cohorts based on 95th quantile of lr permutations
+  lrt.result$mle.p.vals <- inner_join(lrt.result$mle.run, lrt.result$mle.perm, by = c('cohort.name', 'gene.grp'), suffix = c('.mle', '.perm')) %>%
+    group_by(cohort.name, gene.grp) %>%
+    summarize(p.val = mean(lr.perm > lr.mle))
+  
+  lrt.result
+}
+
+plot.mle.perm.hist <- function(lrt.result) {
+  lrt.result$mle.perm %>%
+  ggplot(aes(x = lr)) +
+  facet_grid(cols = vars(gene.grp), rows = vars(cohort.name), scales = 'free') +
+  geom_histogram(bins = 14) +
+  geom_vline(aes(xintercept = lr), linewidth = 1, linetype = 'dotdash', color = '#f42e3d', data = lrt.result$mle.run) +
+  geom_vline(aes(xintercept = lr), linewidth = 1, linetype = 'dashed', data = lrt.result$perm.q95) +
+  labs(
+    y = 'count',
+    x = 'log likelihood',
+  )
+}
+
+plot.mle.perm.contour <- function(lrt.result) {
+  lapply(names(cohorts), function(my.cohort.name) {
+    c(
+      lapply(gene.lkps$grp.to.genes, function(my.gene.grp) {
+        print(paste(my.cohort.name, my.gene.grp))
+        mle.perm <- lrt.result$mle.perm %>%
+          filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name)
+        
+        if (nrow(mle.perm) == 0) {
+          return(ggplot())
+        }
+        
+        mle.observed <- lrt.result$mle.run %>%
+          filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name)
+        
+        mle.target <- lrt.result$mle.target %>%
+          filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name) %>%
+          filter(term %in% c('G', 'G:X')) %>%
+          select(term, estimate) %>%
+          pivot_wider(names_from = 'term', values_from = 'estimate') %>%
+          select(gamma = G, eta = `G:X`)
+        
+        mle.perm %>%
+          ggplot(aes(x = gamma, y = eta)) +
+          geom_density_2d_filled(alpha = 1/3, bins = 4) +
+          geom_density_2d(color = "black", alpha = 0.7, bins = 4) +
+          # geom_point(shape = 1, size = 1/3, alpha = 1/3) +
+          # geom_point(color = "black", size = 1, data = mle.observed) +
+          geom_vline(xintercept = 0, linewidth = 0.53, linetype = 'dotted') +
+          geom_hline(yintercept = 0, linewidth = 0.53, linetype = 'dotted') +
+          geom_point(x = mle.target$gamma, y = mle.target$eta,
+            color = "black", size = 3, shape = 4, stroke = 1) +
+          geom_point(color = "#f42e3d", size = 3, shape = 16, data = mle.observed) +
+          scale_x_continuous(limits = c(-2.5, 2.5)) +
+          scale_y_continuous(limits = c(-1, 1)) +
+          scale_fill_brewer(palette = 'PuBu') +
+          labs(
+            x = expression(gamma),
+            y = expression(eta),
+          ) +
+          theme_bw(base_family="Arial") +
+          theme(
+            legend.position = 'none',
+            plot.background = element_rect(fill = "white", color = NA),
+            axis.text = element_text(size=8),
+            axis.title = element_text(size=10, family = "Arial", face = "bold"),
+          )
+      }),
+      list(grid::textGrob(my.cohort.name, rot = -90))
+    )
+  }) %>% 
+    unlist(recursive = FALSE) %>%
+    {
+      c(map(gene.lkps$grp.to.genes, ~grid::textGrob(.x)),
+        list(plot_spacer()),
+        .
+      )
+    } %>%
+    wrap_plots(
+      ncol = 4,
+      byrow = T,
+      heights = c(1, 5, 5, 5),
+      widths = c(5, 5, 5, 1)
+    ) +
+    plot_layout(
+      axis_titles = 'collect'
+    )
+}
+
+save.lrt.result.xl <- function(lrt.result, path) {
+  lrt.result.xl.sheetmap <- list(
+    'FWD_Est' = 'mle.target',
+    'LRT_Est.' = 'mle.run',
+    'Conf_Int' = 'conf.int',
+    'Perms' = 'mle.perm',
+    'perm.p.vals' = 'mle.p.vals'
+  )
+  
+  wb <- openxlsx::createWorkbook()
+  
+  lrt.result.xl.sheetmap %>%
+    purrr::map(~{
+      lrt.result[[.x]]
+    }) %>%
+    purrr::imap(~{
+      openxlsx::addWorksheet(wb, .y)
+      openxlsx::writeData(wb, .y, .x)
+    })
+  
+  openxlsx::saveWorkbook(wb, path, overwrite = T)
+}
+```
+
+## logit g
+
+the equations for the logit g model are given in
+[equations.logitg.r](../lrt_equations/equations.logitg.r).
+
+### perform lrt permutations
+
+```{r lrt_logitg_3_cohorts, cache=t}
+# source mle functions and load into local environment ####
+source('../lrt_equations/equations.logitG.R')
+logitG.lrt.equations <- define.logitG.equations(cases.only=T)
+
+# perform mle testing under all cohorts ####
+
+logitG.lrt.run <- purrr::map(cohort.dfs, function(cohort.df) {
+  purrr::map(cohort.lkps$gene.grp, function(gene.grp) {
+    lrt.data <- make.lrt.data(rv.prs.df, cohort.df, gene.grp)
+  
+    # calculate forward model parameter "targets"
+    mle.target <- broom::tidy(glm(Y ~ G * X, family = binomial(link = 'logit'), data = lrt.data))
+    
+    # estimate model parameters (alpha, beta, omega)
+    lrt.est.model <- broom::tidy(glm(Y ~ X, family = binomial(link = 'logit'), data = lrt.data))
+  
+    params <- list(
+      alpha = lrt.est.model$estimate[1],
+      beta = lrt.est.model$estimate[2],
+      gamma = 0,
+      eta = 0,
+      omega = mean(lrt.data$G) # rare variant frequency
+    )
+    
+    # run z comparison test
+    z.result <- z.test(params$omega, lrt.data)
+    
+    # run wilcoxon comparison test
+    wilcox.result <- wilcox.test(X ~ G,
+      data = filter(as.data.frame(lrt.data), Y == 1),
+      alternative = 'greater'
+    ) %>%
+      broom::tidy()
+
+    modifyList(
+      list(
+        params=params,
+        mle.target = mle.target,
+        z.result = z.result,
+        wilcox.result = z.result
+      ),
+      run.lrt.tests(lrt.data, params, logitG.lrt.equations, n.mle.perms)
+    )
+  }) %>%
+    purrr::set_names(cohort.lkps$gene.grp)
+})
+
+logitG.lrt.result <- postprocess.lrt.run(logitG.lrt.run)
+
+# save result
+
+# saveRDS(logitG.lrt.result, file.path(OUT_DIR, 'logitG.mle.result.rds'))
+```
+
+### plot results
+
+```{r, logitg_plots}
+# logitG.lrt.result <- readRDS(file.path(out_dir, 'logitG.mle.result.rds'))
+
+plot.mle.perm.contour(logitG.lrt.result) %>%
+  save.plot('logitG.mle.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 6.5, h = 6.5)
+
+plot.mle.perm.hist(logitG.lrt.result) %>%
+  save.plot('logitG.mle.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+```
+
+
+## logit g w/ age
+
+the equations for the logit g model w/ a (age) are given in
+[equations.logitg_a.r](../lrt_equations/equations.logitg_a.r).
+
+### perform logitg_a permutations
+
+```{r lrt_logitg_a_3_cohorts, cache=t, eval = F}
+# source mle functions and load into local environment ####
+source('../lrt_equations/equations.logitg_a.r')
+logitg_a.lrt.equations <- define.logitg_a.equations(cases.only=t)
+
+# perform mle testing under all cohorts ####
+
+logitg_a.lrt.run <- purrr::map(cohort.dfs, function(cohort.df) {
+  purrr::map(cohort.lkps$gene.grp, function(gene.grp) {
+    lrt.data <- make.lrt.data(rv.prs.df, cohort.df, gene.grp)
+  
+    # calculate forward model parameter "targets"
+    mle.target <- broom::tidy(glm(y ~ g + x + a + x:g + a:x, family = binomial(link = 'logit'), data = lrt.data))
+    
+    # estimate model parameters (alpha, beta, omega)
+    lrt.est.model <- broom::tidy(glm(y ~ x + a + a:x, family = binomial(link = 'logit'), data = lrt.data))
+  
+    params <- list(
+      alpha = lrt.est.model$estimate[1], # intercept
+      beta = lrt.est.model$estimate[2], # x coefficient
+      zeta = lrt.est.model$estimate[3], # a coefficient
+      kappa = lrt.est.model$estimate[4], # a:x coefficient
+      gamma = 0,
+      eta = 0,
+      omega = mean(lrt.data$g) # rare variant frequency in disease
+    )
+    
+    # run z comparison test
+    z.result <- z.test(params$omega, lrt.data)
+    
+    # run wilcoxon comparison test
+    wilcox.result <- wilcox.test(x ~ g,
+      data = filter(as.data.frame(lrt.data), y == 1),
+      alternative = 'greater'
+    ) %>%
+      broom::tidy()
+
+    modifyList(
+      list(
+        params=params,
+        mle.target = mle.target,
+        z.result = z.result,
+        wilcox.result = z.result
+      ),
+      run.lrt.tests(lrt.data, params, logitg_a.lrt.equations, n.mle.perms)
+    )
+  }) %>%
+    purrr::set_names(cohort.lkps$gene.grp)
+})
+
+logitg_a.lrt.result <- postprocess.lrt.run(logitg_a.lrt.run)
+
+saverds(logitg_a.lrt.result, file.path(out_dir, 'logitg_a.mle.result.rds'))
+```
+
+### plot results
+
+```{r, lrt_logitg_a_plots}
+logitg_a.lrt.result <- readrds(file.path(out_dir, 'logitg_a.mle.result.rds'))
+
+plot.mle.perm.contour(logitg_a.lrt.result) %>%
+  save.plot('logitg_a.mle.permutation.contour', root.dir = plots_dir, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+
+plot.mle.perm.hist(logitg_a.lrt.result) %>%
+  save.plot('logitg_a.mle.permutation.histogram', root.dir = plots_dir, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+```
+
+## logitg and logitg_a confidence interval table
+
+```{r logitg_and_logitg_a}
+```
+
+
+## perform age partitioned lrt permutations
+
+```{r lrt_logitg_age_partition_cohorts, cache=t}
+# source mle functions and load into local environment ####
+source('../lrt_equations/equations.logitG.R')
+logitG.lrt.equations <- define.logitG.equations(cases.only=T)
+
+# perform mle testing under all cohorts ####
+age.half.lrt.results <- seq(2) %>%
+  purrr::map(~{
+    logitG.age.low.lrt.run <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
+      print(paste0('logitg.age.low: ', cohort.name))
+      purrr::map(cohort.lkps$gene.grp, function(gene.grp) {
+        print(paste0('gene.grp: ', gene.grp))
+        lrt.data <- make.lrt.data(rv.prs.df, cohort.df, gene.grp) %>%
+          mutate(age.half = ntile(A, 2)) %>%
+          filter(age.half == .x)
+        
+        if (length(unique(lrt.data[lrt.data$Y == 1,]$G)) != 2) {
+          return(NULL)
+        }
+      
+        # calculate forward model parameter "targets"
+        mle.target <- broom::tidy(glm(Y ~ G * X, family = binomial(link = 'logit'), data = lrt.data))
+        
+        # estimate model parameters (alpha, beta, omega)
+        lrt.est.model <- broom::tidy(glm(Y ~ X, family = binomial(link = 'logit'), data = lrt.data))
+      
+        params <- list(
+          alpha = lrt.est.model$estimate[1],
+          beta = lrt.est.model$estimate[2],
+          gamma = 0,
+          eta = 0,
+          omega = mean(lrt.data$G) # rare variant frequency
+        )
+    
+        modifyList(
+          list(
+            params=params,
+            mle.target = mle.target
+          ),
+          run.lrt.tests(lrt.data, params, logitG.lrt.equations, n.mle.perms)
+        )
+      }) %>%
+        purrr::set_names(cohort.lkps$gene.grp)
+    })
+  }) %>%
+  purrr::map(postprocess.lrt.run)
+
+# save result
+
+saveRDS(age.half.lrt.results[[1]], file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))
+saveRDS(age.half.lrt.results[[2]], file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))
+
+age.half.lrt.results[[1]] <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))
+age.half.lrt.results[[2]] <- readRDS(file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))
+
+save.lrt.result.xl(age.half.lrt.results[[1]], file.path(OUT_DIR, 'logitG.age.low.lrt.result.xlsx'))
+save.lrt.result.xl(age.half.lrt.results[[2]], file.path(OUT_DIR, 'logitG.age.high.lrt.result.xlsx'))
+```
+
+### plot results
+
+```{r, logitg_plots}
+logitG.age.low.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))
+logitG.age.high.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))
+
+logitG.age.high.lrt.result$mle.p.vals
+
+plot.mle.perm.contour(logitG.age.low.lrt.result) %>%
+  save.plot('logitG.age.low.mle.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+
+plot.mle.perm.hist(logitG.age.low.lrt.result) %>%
+  save.plot('logitG.age.low.mle.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+
+plot.mle.perm.contour(logitG.age.high.lrt.result) %>%
+  save.plot('logitG.age.high.mle.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+
+plot.mle.perm.hist(logitG.age.high.lrt.result) %>%
+  save.plot('logitG.age.high.mle.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
+```

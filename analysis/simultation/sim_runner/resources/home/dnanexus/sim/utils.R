@@ -1,13 +1,5 @@
 library(rootSolve)
 library(parallel)
-library(showtext)
-library(sysfonts)
-
-# font stuff
-font_add(family = "Arial", regular = "Arial.ttf", bold = "Arial_Bold.ttf")
-showtext_auto()
-cowplot::set_null_device("png")
-# end font stuff
 
 expit <- function(logit) {
   1 / (1 + exp(-logit))
@@ -23,7 +15,7 @@ pY <- function(alpha, beta, gamma, eta, X, G) {
 }
 
 n.cores <- ceiling(parallel::detectCores() / 2)
-n.batch <- 128
+n.batch <- 64
 
 # logistic simulator
 sim <- function(
@@ -259,49 +251,4 @@ run.sim.ranges <- function(lrt.func, mle.params, params.ranges, n.sims = 1024) {
   }) %>%
     do.call(bind_rows, .) %>%
     as_tibble()
-}
-
-save.plot.as.ext <- function(
-    ext,
-    my.plot,
-    file.prefix,
-    root.dir = getwd(),
-    sub.dir = '',
-    w = 6.5,
-    h = 4.875,
-    dpi = 1000,
-    ...
-) {
-  dir.create(file.path(root.dir, ext, sub.dir), showWarnings = F, recursive = T)
-  ggsave(
-    filename = file.path(
-      root.dir,
-      ext,
-      sub.dir,
-      paste(file.prefix, ext, sep='.')
-    ),
-    plot = my.plot,
-    width = w,
-    height = h,
-    dpi = dpi,
-    units = "in",
-    ...
-  )
-}
-
-save.plot <- function(
-    my.plot,
-    file.prefix,
-    root.dir = getwd(),
-    sub.dir = '',
-    w = 6.5,
-    h = 4.875,
-    dpi = 1000
-  ) {
-  # save.plot.as.ext('png', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
-  save.plot.as.ext('pdf', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
-  save.plot.as.ext('svg', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi)
-  # save.plot.as.ext('tiff', my.plot, file.prefix, root.dir, sub.dir, w, h, dpi, compression="lzw")
-  
-  my.plot
 }
