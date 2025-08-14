@@ -7,7 +7,13 @@ library(Matrix, quietly = T, warn.conflicts = F)
 # font stuff
 library(showtext)
 library(sysfonts)
-font_add(family = "Arial", regular = "Arial.ttf", bold = "Arial_Bold.ttf")
+font_add(
+  family = "Arial",
+  regular = "Arial.ttf",
+  bold = "Arial_Bold.ttf",
+  italic = "Arial_Italic.ttf",
+  bolditalic = "Arial_Bold_Italic.ttf"
+)
 showtext_auto()
 cowplot::set_null_device("png")
 # end font stuff
@@ -19,37 +25,10 @@ conflict_prefer("filter", "dplyr", quiet = T)
 options(dplyr.summarise.inform = F)
 # end conflicted
 
-# library(randomForest, quietly = T, warn.conflicts = F)
-# library(caret, quietly = T, warn.conflicts = F)
-# library(patchwork, quietly = T, warn.conflicts = F)
-# library(lmtest, quietly = T, warn.conflicts = F)
-# library(distances, quietly = T, warn.conflicts = F)
-# library(Rtsne, quietly = T, warn.conflicts = F)
-# library(broom, quietly = T, warn.conflicts = F)
-# source("utils/main.R")
-# source("utils/data.R")
-# source("utils/variant.classifiers.R")
-# source("utils/lrt.R")
-
-# dev - ukb
-# n.mle.perms <- 16
-# PRS_SOURCE <- NULL
-# RESULTS_DIR <- "./.data/ukb-dev/"
-
-# dev - big3
-# n.mle.perms <- 16
-# PRS_SOURCE <- "./.data/pgs/big3.scores.txt.gz"
-# RESULTS_DIR <- "./.data/.results/big3-dev/"
-
-# prod - ukb
-n.mle.perms <- 512
+n.mle.perms <- 1024
 PRS_SOURCE <- NULL
-RESULTS_DIR <- "./.data/results/pivot-ukb"
-
-# prod - big3
-# n.mle.perms <- 8
-# PRS_SOURCE <- "./.data/pgs/big3.scores.txt.gz"
-# RESULTS_DIR <- "./.data/results/pivot-big3/"
+# PRS_SOURCE <- "./.data/pgs/custom.scores.txt.gz"
+RESULTS_DIR <- "./.data/results/"
 
 # set source and result data dirs from environment ####
 SRC_DATA_DIR <- Sys.getenv("SRC_DATA_DIR")
