@@ -87,15 +87,12 @@ pd.sample.ids <- cohort.dfs$PD[cohort.dfs$PD$case,]$sample.id
 lsd.dbl <- lsd.events[rowSums(lsd.events) == 2,]
 lsd.dbl <- lsd.dbl[na.omit(match(pd.sample.ids, rownames(lsd.dbl))),]
 lsd.dbl <- lsd.dbl[,colSums(lsd.dbl) > 0]
+colnames(lsd.dbl) <- gsub('GBA', 'GBA1', colnames(lsd.dbl))
 lsd.pairs <- lsd.dbl %>% apply(2, function(g1) {
   apply(lsd.dbl, 2, function(g2) {
     sum(g1 & g2)
   })
 })
-
-lsd.pairs.long <- as.data.frame(lsd.pairs) %>%
-  mutate(g1 = rownames(.)) %>%
-  pivot_longer(cols = -g1, names_to = 'g2', values_to = 'n')
 
 
 # save results ####
@@ -136,6 +133,10 @@ lsd.boxplot <- lsd.burden.df %>%
 
 # create doubleton heatmap ####
 
+lsd.pairs.long <- as.data.frame(lsd.pairs) %>%
+  mutate(g1 = rownames(.)) %>%
+  pivot_longer(cols = -g1, names_to = 'g2', values_to = 'n')
+
 lsd.dbl.heatmap <- lsd.pairs.long %>%
   ggplot(aes(x = g1, y = g2, fill = n)) +
   geom_tile(aes(width = 1, height = 1), fill = NA, color = "grey50") +
@@ -148,8 +149,8 @@ lsd.dbl.heatmap <- lsd.pairs.long %>%
   theme(
     aspect.ratio = 1,
     panel.grid = element_blank(),
-    axis.text.x = element_text(size = 7, face = "bold", angle = 45, hjust = 1),
-    axis.text.y = element_text(size = 7, face = "bold"),
+    axis.text.x = element_text(size = 7, face = "bold.italic", angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 7, face = "bold.italic"),
     axis.title = element_text(size = 8, face = "bold"),
   ) +
   labs(
@@ -173,7 +174,7 @@ lsd.burden.p.stars.grob <- grid::textGrob(
 
 (
   (lsd.boxplot + lsd.dbl.heatmap) +
-    plot_annotation(tag_levels = 'A', tag_suffix = ')') +
+    plot_annotation(tag_levels = 'A', tag_suffix = '') +
     inset_element(
       lsd.burden.p.stars.grob,
       left = -1.5,
