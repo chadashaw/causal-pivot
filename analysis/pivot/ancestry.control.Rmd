@@ -1027,7 +1027,6 @@ a.cv.rfm.ipw <- purrr::map(cv.rfm.prop, function(x) {
   
   # repeat w/ non-weighted test
   p.dist.no.weight <- sapply(1:n.perms, function(.) {
-    # permute prs and weight by propensity score (or 1 - score if event == F)
     prs.weighted <- sample(x$prs)
     # calculate test statistic - the normalized difference of weighted PRS b/w RV+ and RV- samples
     (sum(prs.weighted[which(x$rv==T)]) - sum(prs.weighted[which(x$rv==F)])) / nrow(x)
@@ -1089,101 +1088,4 @@ a.cv.rfm.ipw.hist <- purrr::imap(a.cv.rfm.ipw, function(result, cohort.name) {
 })
 
 a.cv.rfm.ipw.hist
-
-# composed plot
-
-composed.theme <- theme(
-  axis.title.y = element_text(size = 12, face = "bold"),
-  axis.title.x = element_text(size = 11, face = "bold"),
-  axis.text.y = element_text(size = 12, face = "bold"),
-  axis.text.x = element_text(size = 12, face = "bold"),
-  axis.ticks.x = element_line(linewidth = 2),
-)
-
-# row 1 (HC190)
-
-a.ipw.plts <- lapply(names(cohorts), function(cohort.name) {
-  hist.plt <- a.ipw.results[[cohort.name]]$hist.plt
-  imp.acc.plt <- a.propensity[[cohort.name]]$imp.acc.plt
-  imp.gini.plt <- a.propensity[[cohort.name]]$imp.gini.plt
-  list(
-    grid::textGrob(cohort.name, rot = 90, gp = grid::gpar(fontface = 'bold')),
-    hist.plt,
-    imp.acc.plt,
-    imp.gini.plt
-  )
-})%>%
-  unlist(recursive = F)
-
-a.ipw.plts[[10]] <- a.ipw.plts[[10]] + labs(x = "Weighted PRS Delta")
-a.ipw.plts[[11]] <- a.ipw.plts[[11]] + labs(x = "Importance (Accuracy)")
-a.ipw.plts[[12]] <- a.ipw.plts[[12]] + labs(x = "Importance (Gini)")
-
-a.ipw.composed.plt <- a.ipw.plts %>%
-  wrap_plots(
-    nrow = 3,
-    byrow = T,
-    widths = c(1, 6, 4, 4)
-  ) %>%
-  {. & composed.theme}
-
-a.ipw.composed.plt
-
-save.plot(a.ipw.composed.plt, paste('ancestry.ipw', sep='.'), w = 6 * 2, h = 4.5 * 2, root.dir = PLOTS_DIR, sub.dir = 'ancestry.balancing/cv.rfm.propensity')
-
-purrr::map(a.ipw.results, ~.$p.val)
-saveRDS(a.ipw.results, file = file.path(OUT_DIR, 'a.ipw.cv.results.rds'))
 ```
-
-
-#### GLM Propensity
-
-```{r glm_propensity}
-# library(rsample)
-# n.outer <- 1
-# n.folds <- 1
-n.pcs <- 40
-# n.trees <- 16
-# 
-# r = 0.637 # the "decay" factor to simulate decreasing eigenvalues of PCs
-# pc.decay <- exp(-r * 0:(n.pcs - 1))
-# pc.weights <- pc.decay / sum(pc.decay)
-
-cv.glm.prop <- purrr::imap(a.cohort.dfs, function(cohort.df, cohort.name) {
-  x <- inner_join(
-    cohort.df,
-    get.pcs.df(n.pcs = n.pcs),
-    by = 'sample.id'
-  ) %>%
-    filter(case)
-  
-  model <- glm(rv ~ ., family = binomial(link = 'logit'), data = select(x, rv, starts_with('pc.')))
-  
-  x$p <- predict(model, x, type = "response")
-  x$p <- reg.p(x$p, t = 4, epsilon = 0.001)
-  x
-})
-
-purrr::map(cv.glm.prop, function(prop) {
-  prop %>%
-    summarize(min = min(p), max = max(p))
-}) %>%
-  concat.df.list(key.cols = 'cohort')
-
-purrr::imap(cv.glm.prop, function(prop, cohort.name) {
-  prop %>%
-    # mutate(p = reg.p(p, t = 4)) %>%
-    # mutate(p.bin = ntile(p, 5)) %>%
-    overlap.plt() +
-    labs(title = 'Regularized Propensities by RV Status', subtitle = cohort.name)
-})
-
-purrr::map(cv.glm.prop, function(prop) {
-  prop %>%
-    # mutate(p = reg.p(p, t = 4)) %>%
-      overlap.measures %>%
-      as.data.frame()
-}) %>%
-  concat.df.list(key.cols = 'cohort')
-```
-

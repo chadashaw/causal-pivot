@@ -25,10 +25,10 @@ conflict_prefer("filter", "dplyr", quiet = T)
 options(dplyr.summarise.inform = F)
 # end conflicted
 
-n.mle.perms <- 1024
+n.mle.perms <- 64
 PRS_SOURCE <- NULL
 # PRS_SOURCE <- "./.data/pgs/custom.scores.txt.gz"
-RESULTS_DIR <- "./.data/results/"
+RESULTS_DIR <- "./.data/results/pivot"
 
 # set source and result data dirs from environment ####
 SRC_DATA_DIR <- Sys.getenv("SRC_DATA_DIR")

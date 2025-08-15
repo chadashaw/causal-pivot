@@ -10,7 +10,7 @@ if (!exists("SRC_DATA_DIR")) {
   SRC_DATA_DIR <- getwd()
 }
 
-# if DST_DATA_DIR is undefined assume CWD
+# if DATA_DIR is undefined assume CWD
 if (!exists("DATA_DIR")) {
   DATA_DIR <- getwd()
 }

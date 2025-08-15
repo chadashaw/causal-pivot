@@ -359,38 +359,3 @@ saveRDS(mt.dist, file = file.path(DATA_DIR, 'mt.dist.rds'))
 saveRDS(alt.counts, file = file.path(OUT_DIR, 'alt.counts.rds'))
 saveRDS(rv.counts, file = file.path(OUT_DIR, 'rv.counts.rds'))
 ```
-
-
-# Age Confounding
-
-```{r age_conf, eval=F}
-# library(clipr)
-library(knitr)
-cohort.age.conf.df <- purrr::map(cohort.dfs, function(cohort.df) {
-  broom::tidy(glm(case ~ age * prs * rv, family = binomial(link = 'logit'), data = cohort.df))
-}) %>%
-  concat.df.list(key.cols = 'cohort') %>%
-  filter(term != '(Intercept)')
-cohort.pivot.age.conf.df <- purrr::map(cohort.dfs, function(cohort.df) {
-  broom::tidy(glm(rv ~ age * prs, family = binomial(link = 'logit'), data = cohort.df %>% filter(case)))
-}) %>%
-  concat.df.list(key.cols = 'cohort') %>%
-  filter(term != '(Intercept)')
-
-concat.df.list(cohort.dfs, key.cols = 'cohort') %>%
-  mutate(rv = ifelse(rv, 'rv+', 'rv-')) %>%
-  ggplot(aes(x = prs, y = age)) +
-  geom_density_2d_filled(alpha = 1/3, bins = 7) +
-  geom_density_2d(aes(color = case), alpha = 0.7) +
-  facet_grid(cols = vars(cohort), rows = vars(rv)) +
-  labs(title = '2D Confounders Density Plot')
-
-concat.df.list(cohort.dfs, key.cols = 'cohort') %>%
-  filter(case) %>%
-  mutate(rv = ifelse(rv, 'rv+', 'rv-')) %>%
-  ggplot(aes(x = prs, y = age)) +
-  geom_density_2d_filled(alpha = 1/3, bins = 7) +
-  geom_density_2d(color = 'black', alpha = 0.7) +
-  facet_grid(cols = vars(cohort), rows = vars(rv)) +
-  labs(title = '2D Confounders Density Plot (Cases Only)')
-```
