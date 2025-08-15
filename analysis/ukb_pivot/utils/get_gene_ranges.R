@@ -33,9 +33,3 @@ values
 my.range
 my.range$to - my.range$from
 
-# padding <- 30*1000
-# 
-# data$transcript_start - padding
-# data$transcript_end + padding)
-# 
-# View(data)

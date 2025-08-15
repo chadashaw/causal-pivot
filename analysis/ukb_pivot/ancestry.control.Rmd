@@ -1,7 +1,4 @@
 ```{r ancestry_control_deps}
-# library(paletteer, quietly = T, warn.conflicts = F)
-# library(waffle, quietly = T, warn.conflicts = F)
-# library(distances, quietly = T, warn.conflicts = F)
 library(Rtsne, quietly = T, warn.conflicts = F)
 library(patchwork, quietly = T, warn.conflicts = F)
 source("utils/main.R")
@@ -18,10 +15,6 @@ prs <- readRDS(file.path(OUT_DIR, 'prs.rds'))
 cohort.meta <- readRDS(file.path(DATA_DIR, 'cohort.meta.rds'))
 
 gene.lkps <- readRDS(file.path(DATA_DIR, 'gene.lkps.rds'))
-# annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
-# cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
-# cohort.marks <- readRDS(file.path(DATA_DIR, 'cohort.marks.rds'))
-# rv.mtx <- readRDS(file.path(DATA_DIR, 'rv.mtx.rds'))
 ```
 
 ```{r ancestry_control_new_rv_spec}
@@ -113,7 +106,6 @@ calc.a.dist <- function(a.mat, weights) {
   distances::distances(a.mat, weights=norm.weights)
 }
 
-# saveRDS(knn.results, file.path(OUT_DIR, 'knn.results.rds'))
   
 process.knn.results <- function(knn.results) {
   knn.results %>%
@@ -411,7 +403,6 @@ knn.plots.w.age <- process.knn.results(knn.results.w.age)
 
 # save results ####
 
-# saveRDS(modifyList(knn.results, knn.plots), file = file.path(OUT_DIR, 'fig4.rds'))
 
 {
   base.fig4.theme <- theme_bw(base_family = "Arial") +
@@ -942,7 +933,6 @@ cv.rfm.prop <- purrr::imap(a.cohort.dfs, function(cohort.df, cohort.name) {
   #   left_join(rfm.propensities, by = 'sample.id')
 })
 
-# hist(cv.rfm.prop$HC190$p)
 
 purrr::map(cv.rfm.prop, function(prop) {
   prop %>%

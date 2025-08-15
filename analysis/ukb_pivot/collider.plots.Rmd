@@ -11,13 +11,9 @@ output:
 ---
 
 ```{r collider_plots_deps, include=F}
-# library(paletteer, quietly = T, warn.conflicts = F)
-# library(waffle, quietly = T, warn.conflicts = F)
 library(patchwork, quietly = T, warn.conflicts = F)
 source("utils/main.R")
 source("utils/data.R")
-# 
-# rv.flags <- readRDS(file.path(OUT_DIR, 'rv.flags.rds'))
 cohort.dfs <- readRDS(file.path(OUT_DIR, 'cohort.dfs.rds'))
 rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
 cv.cohort.dfs <- readRDS(file.path(OUT_DIR, 'cv.cohort.dfs.rds'))
@@ -28,10 +24,6 @@ cohort.meta <- readRDS(file.path(DATA_DIR, 'cohort.meta.rds'))
 cohorts <- readRDS(file.path(DATA_DIR, 'cohorts.rds'))
 gene.lkps <- readRDS(file.path(DATA_DIR, 'gene.lkps.rds'))
 mt.dist <- readRDS(file.path(DATA_DIR, 'mt.dist.rds'))
-# annotations <- readRDS(file.path(DATA_DIR, 'annotations.rds'))
-# cohort.lkps <- readRDS(file.path(DATA_DIR, 'cohort.lkps.rds'))
-# cohort.marks <- readRDS(file.path(DATA_DIR, 'cohort.marks.rds'))
-# rv.mtx <- readRDS(file.path(DATA_DIR, 'rv.mtx.rds'))
 ```
 
 
@@ -142,15 +134,6 @@ cv.cc.prs.stats.df <- cv.cc.prs.df %>%
   ungroup()
 
 # calculate p-values using logistic regression ####
-
-calc.p.val <- function(formula, data) { 
-  summary(
-    glm(formula,
-      data = data,
-      family = binomial(link='logit')
-    )
-  )[[12]][2,4]
-}
 
 cv.cc.prs.pvals.df <- split(cv.cc.prs.df, ~cohort.name) %>%
   map(function(prs.df) {
@@ -282,33 +265,6 @@ tertiles.p.vals <- expand.grid(cohort = names(cohorts), gene.grp = unlist(gene.l
 
 # calculate p.values via glm
 
-# tertiles.grid <- expand.grid(
-#   cohort.name = names(cohorts),
-#   gene.grp = unlist(gene.lkps$grp.to.genes)
-# )
-# 
-# tertiles.p.vals <- pmap(tertiles.grid, function(cohort.name, gene.grp.name) {
-#   p.val <- tryCatch({
-#     my.data <- x.cohort.df %>%
-#       filter(cohort == cohort.name & gene.grp == gene.grp.name)
-#     glm.test <- broom::tidy(glm(rv ~ prs, data = my.data, family = binomial(link = "logit")))
-#     glm.test[glm.test$term == 'prs',]$p.value
-#   }, error = function(e) NA)
-#   list(
-#     cohort = cohort.name,
-#     gene.grp = gene.grp.name,
-#     p.val = p.val
-#   )
-# }) %>%
-#   do.call(bind_rows, .) %>%
-#   as_tibble() %>%
-#   mutate(stars = ifelse(p.val < 0.001, '***', ifelse(p.val < 0.01, '**', ifelse(p.val < 0.05, '*', '')))) %>%
-#   left_join(
-#     n.events.df %>%
-#       group_by(cohort) %>%
-#       summarize(y = max(n))
-#     , by = c('cohort')
-#   )
 
 # create and save plot ####
 tertiles.3x3 <- (

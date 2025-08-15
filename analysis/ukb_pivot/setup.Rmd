@@ -11,9 +11,6 @@ output:
 ---
 
 ```{r setup_deps, include=F}
-# library(dplyr, quietly = T, warn.conflicts = F)
-# library(tidyr, quietly = T, warn.conflicts = F)
-# library(Matrix, quietly = T, warn.conflicts = F)
 source("./utils/main.R")
 source("./utils/data.R")
 ```

@@ -55,8 +55,6 @@ The analysis proceeds as follows:
 # if NULL or empty, will use UKB
 PRS_SOURCE <- NULL
 RESULTS_DIR <- "./.data/results/pivot-ukb/"
-# PRS_SOURCE <- "./.data/prs/big3.scores.txt.gz"
-# RESULTS_DIR <- "./.data/results/pivot-big3/"
 
 # set source and result data dirs from environment ####
 SRC_DATA_DIR <- Sys.getenv("SRC_DATA_DIR")

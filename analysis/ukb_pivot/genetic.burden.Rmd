@@ -20,8 +20,6 @@ showing not one gene pair dominates effect.
 
 
 ```{r collider_plots_deps, include=F}
-# library(paletteer, quietly = T, warn.conflicts = F)
-# library(waffle, quietly = T, warn.conflicts = F)
 library(patchwork, quietly = T, warn.conflicts = F)
 source("utils/main.R")
 source("utils/data.R")

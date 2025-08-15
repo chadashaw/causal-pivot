@@ -227,8 +227,6 @@ e.lrt.runs <- e.sim.runs %>%
   purrr::map(~ .x$lrt.result) %>%
   purrr::list_rbind()
 
-# saveRDS(lrt.e.result, file.path(out.dir, 'enriched.lrt.result.rds'))
-# lrt.e.result <- readRDS(file.path(out.dir, 'enriched.lrt.result.rds'))
 lrt.e.power <- lrt.e.result %>%
   mutate(
     co.lrt.p.val = ifelse(co.gamma < 0, 1, co.lrt.p.val),
@@ -343,7 +341,6 @@ o.lrt.runs <- o.sim.runs %>%
   purrr::list_rbind()
 
 o.power.df <- create.power.df(o.lrt.runs, c('param.omega'))
-# saveRDS(o.power.df, file.path(out.dir, 'o.power.df.rds'))
 # lrt.o.result <- readRDS(file.path(out.dir, 'overestimation.lrt.result.rds'))
 ```
 
@@ -428,8 +425,6 @@ lrt.result.beta <- b.sim.runs %>%
   purrr::map(~ .x$lrt.result) %>%
   purrr::list_rbind()
 
-# saveRDS(lrt.result.beta, file.path(out.dir, 'beta.lrt.result.rds'))
-# lrt.result.beta <- readRDS(file.path('./.data/power_analysis/', 'beta.lrt.result.rds'))
 
 lrt.power.beta <- lrt.result.beta %>%
   mutate(
@@ -1171,7 +1166,6 @@ lrt.result.beta <- mapply(function(beta, eta) {
 }, lrt.ranges.beta$beta, lrt.ranges.beta$eta, SIMPLIFY = F) %>%
   do.call(bind_rows, .) %>%
   as_tibble()
-# saveRDS(lrt.result.beta, file.path(out.dir, 'beta.lrt.result.rds'))
 
 lrt.power.beta <- lrt.result.beta %>%
   mutate(
