@@ -1,2 +1,7 @@
 .data
 .Rproj.user
+
+# LRT Equation Support Files
+*.rforms.txt
+*.cforms.txt
+*.nb
