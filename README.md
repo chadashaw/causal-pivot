@@ -20,7 +20,6 @@ and performed comprehensive power analysis using simulations.
 │   ├── ukb_pivot/          # Main empirical analysis on UK Biobank data
 │   ├── lrt_power/          # Power analysis and simulation studies  
 │   ├── equations/          # Mathematical foundations (MLE equations)
-│   └── examples/           # Simple reproducible examples
 ├── gt_extract/             # Genotype extraction workflow (DNAnexus)
 ```
 
