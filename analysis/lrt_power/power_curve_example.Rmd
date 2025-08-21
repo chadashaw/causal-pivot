@@ -212,7 +212,7 @@ print(power.plot)
 
 ```{r save_results, warning=F, message=F}
 # Save plots
-out.dir <- "output"
+out.dir <- ".data/examples/"
 dir.create(out.dir, showWarnings = F, recursive = T)
 
 ggsave(
