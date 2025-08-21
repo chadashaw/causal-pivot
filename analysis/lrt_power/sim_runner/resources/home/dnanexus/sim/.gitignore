@@ -1,1 +1,10 @@
-renv
+*.RData
+.Rhistory
+.Rprofile
+.Renviron
+.Rproj.user*
+.Rproj.user
+*.Rproj
+*.rds
+
+sim_runner/resources/home/dnanexus/R

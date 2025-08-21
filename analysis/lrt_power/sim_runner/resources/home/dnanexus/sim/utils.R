@@ -154,7 +154,6 @@ mle.optim <- function(f, d, f.params, start) {
 }
 
 mle <- function(lrt.equations, lrt.data, params) {
-  # browser()
   f.params <- modifyList(params, lrt.data)
   f.params <- extract.args.for.function(lrt.equations$D, f.params)
   
@@ -211,8 +210,7 @@ run.lrt <- function(lrt.equations, lrt.data, params) {
 }
 
 run.lrt.sims <- function(f.lrt, params, n.sims) {
-  # print(unlist(purrr::map(params, ~ format(., scientific = F))))
-  #
+
   n.complete <- 0
   lrt.result <- data.frame()
   # run in batches of n.batch until n.sims complete
@@ -234,10 +232,6 @@ run.lrt.sims <- function(f.lrt, params, n.sims) {
     lrt.result <- bind_rows(lrt.result, bind_rows(lrt.batch))
   }
   
-  # for (param in names(params)) {
-  #   lrt.result[[paste0('param.', param)]] <- params[[param]]
-  # }
-    
   lrt.result
 }
 

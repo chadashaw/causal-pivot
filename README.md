@@ -46,10 +46,10 @@ See the [figure index](FIGURE_INDEX.md) for details about which parts of the cod
 
 Each analysis component has detailed documentation:
 
-- [**Genotype Extraction**](gt_extract/README.md) - UKB WES data extraction and data preprocessing workflow
-- [**Equations**](analysis/equations/README.md) - Mathematical foundations and MLE equations
-- [**Empirical Analysis**](analysis/ukb_pivot/README.md) - Main UK Biobank analysis workflow
-- [**Power Analysis**](analysis/lrt_power/README.md) - Simulation studies and power calculations  
+- [**Genotype Extraction**](gt_extract) - UKB WES data extraction and data preprocessing workflow
+- [**Equations**](analysis/equations) - Mathematical foundations and MLE equations
+- [**Empirical Analysis**](analysis/ukb_pivot) - Main UK Biobank analysis workflow
+- [**Power Analysis**](analysis/lrt_power) - Simulation studies and power calculations  
 
 ## Reproducibility
 

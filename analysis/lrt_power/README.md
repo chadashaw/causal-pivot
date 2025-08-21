@@ -19,8 +19,7 @@ The analysis investigates test performance across different parameter spaces and
 ## Key Files
 
 ### Main Analysis
-- **lrt.sim.Rmd**: Primary power analysis with comprehensive simulations
-- **power.curve.R**: Power curve generation and visualization
+- **lrt.sim.Rmd**: Primary power analysis with comprehensive simulations and figure generation
 
 ### Simulation Runners
 - **runners/main.logitG.R**: Logistic model simulations
@@ -59,11 +58,8 @@ renv::restore()
 # Navigate to power analysis directory
 setwd("analysis/lrt_power")
 
-# Run main power analysis
+# Run main power analysis (generates all figures)
 rmarkdown::render("lrt.sim.Rmd")
-
-# Generate specific power curves
-source("power.curve.R")
 ```
 
 ### Cloud Execution (DNAnexus)

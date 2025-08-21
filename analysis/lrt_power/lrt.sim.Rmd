@@ -128,10 +128,15 @@ augment.sigmoid <- function(power.df, x.param.name, sigmoid.res = 0.01) {
 ## run sims
 
 ```{r execute_logitG_lrt_sims, cache=T}
-sim.run.dir <- '.data/sim_runs/random_test/'
-tmp.files <- dir(sim.run.dir)
-logitG.lrt.runs <- tmp.files[grepl('64.rds$', tmp.files)] %>%
-  purrr::map(~ readRDS(file.path(sim.run.dir, .x))) %>%
+sim.run.dir <- '.data/sim_runs/fig2A/'
+
+logitG.sim.runs <- dir(sim.run.dir) %>%
+  .[grepl('64.rds$', .)] %>%
+  purrr::map(~ readRDS(file.path(sim.run.dir, .x)))
+
+params.logitG <- logitG.sim.runs[[1]]$params
+
+logitG.lrt.runs <- logitG.sim.runs %>%
   purrr::map(~ .x$lrt.result) %>%
   purrr::list_rbind()
 
@@ -227,7 +232,7 @@ e.lrt.runs <- e.sim.runs %>%
   purrr::map(~ .x$lrt.result) %>%
   purrr::list_rbind()
 
-lrt.e.power <- lrt.e.result %>%
+lrt.e.power <- e.lrt.runs %>%
   mutate(
     co.lrt.p.val = ifelse(co.gamma < 0, 1, co.lrt.p.val),
     z.p.val = 1 - pnorm(z)
@@ -581,32 +586,6 @@ logitG_A.compare.df <- augment.sigmoid(logitG_A.power.df, 'param.gamma') %>%
     test = factor(test.labels[test], levels = test.labels)
   )
 
-# (
-#   logitG_A.power.df %>%
-#   filter(test %in% c('co.lrt')) %>%
-#   mutate(param.kappa = as.factor(param.kappa)) %>%
-#   ggplot(aes(x = param.zeta, y = power, color = test)) +
-#   scale_color_manual(values = test.colors) +
-#   # geom_line(aes(linetype = param.kappa), linewidth = 2/3,
-#   #   data = subset(logitG_A.compare.df, src == 'fit')
-#   # ) +
-#   geom_point(aes(shape = param.kappa), size = 2) +
-#   scale_shape_manual(values = c(
-#     '0' = 21,
-#     '1' = 16
-#   )) +
-#   # scale_linetype_manual(values = c('1' = 'solid', '-1' = 'dotted')) +
-#   # scale_x_continuous(limits = c(0, 2), breaks = seq(0, 2, by = 0.2)) +
-#   labs(
-#     x = expression(zeta),
-#     y = 'Power',
-#     color = 'Test',
-#     shape = expression(kappa),
-#     linetype = expression(kappa),
-#   )
-# ) %>%
-#   save.plot('lrt.logitG_A.power', root.dir = out.dir, w = 4.5, h = 4.5)
-
 (
   logitG_A.compare.df %>%
   ggplot(aes(x = param.gamma, y = power, color = test)) +
@@ -634,16 +613,12 @@ logitG_A.compare.df <- augment.sigmoid(logitG_A.power.df, 'param.gamma') %>%
     theme(
       panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
       panel.grid.minor = element_line(color = "grey90", linewidth = 0.25),
-      # axis.line = element_blank(),
-      # axis.line.x.bottom = element_line(color="black"),
-      # axis.line.y.left = element_line(color="black"),
       axis.text = element_text(size=8),
       axis.title.y = element_text(size=8, family = "Arial", face = "bold"),
       axis.title.x = element_text(size=10, family = "Arial", face = "bold"),
       legend.text = element_text(size=6),
       legend.title = element_text(size=8),
       legend.position = c(0.7, 0.6),
-      # legend.justification = c(1, 0),
       legend.background = element_rect(fill = "white"),
       legend.spacing.y = unit(1/3, "cm"),
       legend.key.height = unit(0.5, "lines"),
@@ -707,16 +682,12 @@ compare.df <- compare.df %>%
     theme(
       panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
       panel.grid.minor = element_line(color = "grey90", linewidth = 0.25),
-      # axis.line = element_blank(),
-      # axis.line.x.bottom = element_line(color="black"),
-      # axis.line.y.left = element_line(color="black"),
       axis.text = element_text(size=8),
       axis.title.y = element_text(size=8, family = "Arial", face = "bold"),
       axis.title.x = element_text(size=10, family = "Arial", face = "bold"),
       legend.text = element_text(size=6),
       legend.title = element_text(size=8),
       legend.position = c(0.7, 0.6),
-      # legend.justification = c(1, 0),
       legend.background = element_rect(fill = "white"),
       legend.spacing.y = unit(1/3, "cm"),
       legend.key.height = unit(0.5, "lines"),
@@ -743,14 +714,13 @@ compare.df <- compare.df %>%
 ## run sims
 
 ```{r run_liability_sims, cache=T}
-source('../lrt_equations/equations.liabilityG.R')
-list2env(lrt.liabilityG.equations, envir = environment())
+source('../equations/equations.liabilityG.R')
+liabilityG.equations <- define.liabilityG.equations(cases.only=T)
 
 f.lrt.liability <- function(params) {
-  sim.result <- f.call(sim, params)
+  sim.result <- f.call(liabilityG.equations$sim, params)
   
-  # lrt.cc <- run.lrt(sim.result, params, cases.only = F)
-  lrt.co <- run.lrt(sim.result, params, cases.only = T)
+  lrt.co <- run.lrt(liabilityG.equations, sim.result, params)
    
   x <- data.frame(sim.result)
   
@@ -792,7 +762,7 @@ params.liability <- list(
 gamma.liability.range <- seq(0.0, 1.2, length.out = 9)
 eta.liability.range <- c(-0.4, 0)
 
-n.liability.sims <- 1024
+n.liability.sims <- 64
 
 lrt.liability.ranges <- expand.grid(gamma = gamma.liability.range, eta = eta.liability.range)
 
@@ -811,14 +781,6 @@ lrt.liability.result <- mapply(function(gamma, eta) {
   as_tibble()
 
 saveRDS(lrt.liability.result, file.path(out.dir, 'liability.lrt.result.rds'))
-# lrt.liability.result <- readRDS(file.path(out.dir, 'liability.lrt.result.rds'))
-
-# lrt.liabilityG.result <- lapply(
-#   list.files('.data/liabilityG_1024_beta0.5_optim_v1/', full.names = T),
-#   readRDS
-#   ) %>%
-#   bind_rows() %>%
-#   arrange(gamma, eta)
 ```
 
 ## generate power curves
@@ -828,7 +790,6 @@ lrt.liability.result <- readRDS('./.data/power_analysis/liability.lrt.result.rds
 lrt.liability.power <- lrt.liability.result %>%
   select(param.gamma, param.eta, ends_with('gamma'), ends_with('.p.val')) %>%
   mutate(
-    # cc.lrt.p.val = ifelse(cc.gamma < 0, 1, cc.lrt.p.val),
     co.lrt.p.val = ifelse(co.gamma < 0, 1, co.lrt.p.val)
   ) %>%
   pivot_longer(cols = ends_with('.p.val'), names_to = 'test', values_to = 'p.val') %>%
@@ -838,7 +799,6 @@ lrt.liability.power <- lrt.liability.result %>%
   ungroup() %>%
   filter(param.eta != 0.1) %>%
   filter(test != 'cc.lrt')
-  # mutate(test = gsub('^co.', '', test))
 
 lrt.liability.power.sigmoid <- expand.grid(
   unique(lrt.liability.power$test),
@@ -898,15 +858,11 @@ compare.liability.df <- bind_rows(
       theme(
         panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
         panel.grid.minor = element_line(color = "grey90", linewidth = 0.25),
-        # axis.line = element_blank(),
-        # axis.line.x.bottom = element_line(color="black"),
-        # axis.line.y.left = element_line(color="black"),
         axis.text = element_text(size=8),
         axis.title = element_text(size=8, family = "Arial", face = "bold"),
         legend.text = element_text(size=6),
         legend.title = element_text(size=8),
         legend.position = c(0.8, 0.5),
-        # legend.justification = c(1, 0),
         legend.background = element_rect(fill = "white"),
         legend.spacing.y = unit(0, "cm"),
         legend.key.height = unit(0.5, "lines"),
@@ -921,22 +877,17 @@ compare.liability.df <- bind_rows(
   save.plot('supp.fig3', root.dir = out.dir, w = 3.34, h = 3.34)
 ```
 
-
-
 # save params object ####
 
 ```{r save_params}
 list(
-  logitG.params = unlist(params),
+  logitG.params = unlist(params.logitG),
   liabilityG.params = unlist(params.liability),
   logitG.null.w.params = unlist(params.e),
   logitG.nonnull.w.params = unlist(params.o)
 ) %>%
   saveRDS(file.path(out.dir, 'power.params.rds'))
 ```
-
-
-
 
 # save data ####
 
@@ -948,480 +899,4 @@ list(
   overspec.power = lrt.o.power
 ) %>%
   saveRDS(file.path(out.dir, 'simulation.power.results.RDS'))
-```
-
-
-# supplemental logitG control contamination analysis ####
-
-## re-load logitG equations
-
-```{r reload_logitG_equations, message=F, results='hide'}
-source('../lrt_equations/equations.logitG.R')
-list2env(lrt.logitG.equations, envir = environment())
-```
-
-## run sims
-
-```{r load_liabilityG_results, cache=T, cache.extra=file.info('.data/liabilityG_1024_beta0.5_optim_v1/')}
-f.lrt.c <- function(params) {
-  sim.result <- f.call(sim, params)
-  
-  Y1G1.idx <- which(sim.result$Y == 1 & sim.result$G == 1 )
-  
-  c.range <- c(0, 0.1, 0.25, 0.5, 0.9)
-  
-  a <- lapply(c.range, function(c.level) {
-    contaminated.sim.result <- sim.result
-    contaminated.idx <- sample(Y1G1.idx, floor(c.level * length(Y1G1.idx)))
-    contaminated.sim.result$Y[contaminated.idx] <- 0
-    
-    x <- data.frame(contaminated.sim.result)
-    
-    lrt.co <- run.lrt(contaminated.sim.result, params, cases.only = T)
-    
-    fwd.p.val <- lmtest::lrtest(
-      glm(Y ~ 1 + X + G + GX, family = binomial(link = 'logit'), data = x),
-      glm(Y ~ 1 + X, family = binomial(link = 'logit'), data = x)
-    )[2,5]
-     
-    wilcox.p.val <- wilcox.test(
-      X ~ G,
-      data = x[x$Y==1,],
-      alternative = 'greater'
-    )$p.value
-    
-    r <- setNames(lrt.co, paste('co', names(lrt.co), sep='.')) %>%
-      # modifyList(setNames(lrt.cc, paste('cc', names(lrt.cc), sep='.'))) %>%
-      modifyList(
-        list(
-          fwd.p.val = fwd.p.val,
-          wilcox.p.val = wilcox.p.val
-        )
-      ) %>%
-        modifyList(z.test(w = params$omega, contaminated.sim.result))
-    
-    r$c.lvl <- c.level
-    r
-  }) %>%
-    do.call(bind_rows, .)
-}
-
-params.c <- list(
-  n = 5e5,
-  omega = 0.001,
-  alpha = -2.2,
-  beta = 0.6,
-  eta = -0.4,
-  gamma = 0.6
-)
-
-n.c.sims <- 32
-
-lrt.c.result <- run.lrt.sims(f.lrt.c, params.c, n.sims = n.c.sims)
-
-saveRDS(lrt.c.result, file.path(out.dir, 'c.lrt.result.rds'))
-```
-
-## generate power curves
-
-```{r}
-lrt.c.power <- lrt.c.result %>%
-  select(c.lvl, ends_with('gamma'), ends_with('.p.val')) %>%
-  mutate(
-    # cc.lrt.p.val = ifelse(cc.gamma < 0, 1, cc.lrt.p.val),
-    co.lrt.p.val = ifelse(co.gamma < 0, 1, co.lrt.p.val)
-  ) %>%
-  pivot_longer(cols = ends_with('.p.val'), names_to = 'test', values_to = 'p.val') %>%
-  mutate(test = gsub('.p.val', '', test)) %>%
-  group_by(test, c.lvl) %>%
-  summarize(power = mean(p.val < 0.05)) %>%
-  ungroup()
-
-lrt.c.power.sigmoid <- expand.grid(
-  unique(lrt.c.power$test)
-) %>%
-  apply(1, function(vals) {
-    test <- vals[1]
-    power.df <- lrt.c.power[
-      lrt.c.power$test == test,]
-    my.sigmoid <- fit.sigmoid(power.df$c.lvl, power.df$power, res.fit = 0.05) %>%
-      rename('c.lvl' = x, 'power' = y)
-    my.sigmoid$test <- test
-    my.sigmoid
-  }) %>%
-  do.call(bind_rows, .) %>%
-  as_tibble()
-
-lrt.c.power$src <- 'data'
-lrt.c.power.sigmoid$src <- 'fit'
-
-test.c.colors <- c(
-  'wilcox' = '#e32ff4',
-  'co.lrt' = '#f42e3d',
-  'z' = '#2ff4e4',
-  'fwd' = '#2ff481'
-)
-
-compare.c.df <- bind_rows(
-  lrt.c.power,
-  lrt.c.power.sigmoid
-) %>%
-  filter(test %in% names(test.c.colors))
-
-power.c.plt <- (
-  compare.c.df %>%
-    ggplot(aes(x = c.lvl, y = power, color = test)) +
-    scale_color_manual(values = test.c.colors) +
-    geom_line(linewidth = 2/3,
-              data = subset(compare.c.df, src == 'fit')
-    ) +
-    geom_point(size = 2,
-               data = subset(compare.c.df, src == 'data')
-    ) +
-    # scale_shape_manual(values = c(
-    #   '0' = 16,
-    #   '-0.4' = 21
-    # )) +
-    # scale_linetype_manual(values = c('-0.4' = 'dotted', '0' = 'solid')) +
-    scale_x_continuous(
-      limits = c(0, 1),
-      breaks = seq(0, 1, by = 0.25)
-    ) +
-    labs(
-      x = 'Contamination Level',
-      y = 'Power',
-      color = 'Test',
-    )
-) %>%
-  save.plot('lrt.c.power', root.dir = out.dir, w = 4.5, h = 4.5)
-
-power.c.plt
-```
-
-# Vary Beta ####
-
-## run sims
-
-```{r execute_beta_lrt_sims, cache=T}
-source('../lrt_equations/equations.logitG.R')
-
-# cc.logitG.equations <- define.logitG.equations(cases.only=F)
-co.logitG.equations <- define.logitG.equations(cases.only=T)
-
-f.lrt.beta <- function(params) {
-  sim.result <- f.call(sim, params)
-  x <- as.data.frame(sim.result)
-  
-  # lrt.cc <- run.lrt(sim.result, params, cases.only = F)
-  lrt.co <- run.lrt(co.logitG.equations, sim.result, params)
-  
-  # fwd.p.val <- lmtest::lrtest(
-  #   glm(Y ~ 1 + X + G + GX, family = binomial(link = 'logit'), data = x),
-  #   glm(Y ~ 1 + X, family = binomial(link = 'logit'), data = x)
-  # )[2,5]
-  fwd.p.val <- NULL
-  
-  wilcox.p.val <- wilcox.test(
-    X ~ G,
-    data = x[x$Y==1,],
-    alternative = 'greater'
-  )$p.value
-  
-  setNames(lrt.co, paste('co', names(lrt.co), sep='.')) %>%
-    # modifyList(setNames(lrt.cc, paste('cc', names(lrt.cc), sep='.'))) %>%
-    modifyList(
-      list(
-        fwd.p.val = fwd.p.val,
-        wilcox.p.val = wilcox.p.val
-      )
-    ) %>%
-      modifyList(z.test(w = params$omega, sim.result))
-}
-
-params.beta <- list(
-  n = 5e5,
-  omega = 0.001,
-  alpha = -2.2,
-  # beta = 0.6,
-  gamma = 0.6
-)
-
-beta.range <- c(0, 0.1, 0.3, 0.6)
-eta.range <- c(-0.4, 0)
-
-lrt.ranges.beta <- expand.grid(beta = beta.range, eta = eta.range)
-
-lrt.result.beta <- mapply(function(beta, eta) {
-  params.beta$beta <- beta
-  params.beta$eta <- eta
-  
-  r <- run.lrt.sims(f.lrt.beta, params.beta, n.sims = 32)
-  
-  r$param.gamma <- params.beta$gamma
-  r$param.omega <- params.beta$omega
-  r$param.alpha <- params.beta$alpha
-  r$param.beta <- params.beta$beta
-  r$param.eta <- params.beta$eta
-  
-  r
-}, lrt.ranges.beta$beta, lrt.ranges.beta$eta, SIMPLIFY = F) %>%
-  do.call(bind_rows, .) %>%
-  as_tibble()
-
-lrt.power.beta <- lrt.result.beta %>%
-  mutate(
-    # cc.lrt.p.val = ifelse(cc.gamma < 0, 1, cc.lrt.p.val),
-    co.lrt.p.val = ifelse(co.gamma < 0, 1, co.lrt.p.val)
-  ) %>%
-  select(param.beta, param.eta, ends_with('.p.val')) %>%
-  pivot_longer(cols = ends_with('.p.val'), names_to = 'test', values_to = 'p.val') %>%
-  mutate(test = gsub('.p.val', '', test)) %>%
-  group_by(across(starts_with('param')), test) %>%
-  summarize(power = mean(p.val < 0.05)) %>%
-  ungroup()
-saveRDS(lrt.power.beta, file.path(out.dir, 'beta.lrt.power.rds'))
-```
-
-## generate power curve
-
-```{r generate_beta_power_curve}
-lrt.power.beta.sigmoid <- expand.grid(unique(lrt.power.beta$test), unique(lrt.power.beta$param.eta)) %>%
-  apply(1, function(vals) {
-    test <- vals[1]
-    param.eta <- as.numeric(vals[2])
-    power.df <- lrt.power.beta[
-      lrt.power.beta$test == test & lrt.power.beta$param.eta == param.eta,]
-    my.sigmoid <- fit.sigmoid(power.df$param.beta, power.df$power) %>%
-      rename('param.beta' = x, 'power' = y)
-    my.sigmoid$test <- test
-    my.sigmoid$param.eta <- param.eta
-    my.sigmoid
-  }) %>%
-  do.call(bind_rows, .) %>%
-  as_tibble()
-
-lrt.power.beta$src <- 'data'
-lrt.power.beta.sigmoid$src <- 'fit'
-
-compare.df.beta <- bind_rows(
-  lrt.power.beta,
-  lrt.power.beta.sigmoid
-) %>%
-  mutate(
-    param.eta = as.factor(param.eta),
-    test = factor(test.labels[test], levels = test.labels)
-  )
-
-power.plt.beta <- (
-  compare.df.beta %>%
-  ggplot(aes(x = param.beta, y = power, color = test)) +
-  scale_color_manual(values = lbl.colors, name = NULL) +
-  geom_line(aes(linetype = param.eta), linewidth = 2/3,
-    data = subset(compare.df.beta, src == 'fit')
-  ) +
-  geom_point(aes(shape = param.eta), size = 2,
-    data = subset(compare.df.beta, src == 'data')
-  ) +
-  scale_shape_manual(values = c(
-    '-0.4' = 21,
-    '0' = 16
-  )) +
-  scale_linetype_manual(values = c('0' = 'solid', '-0.4' = 'dotted')) +
-  scale_x_continuous(limits = c(0, 0.6), breaks = seq(0, 0.6, by = 0.1)) +
-  labs(
-    x = expression(beta),
-    y = 'Power',
-    color = 'Test',
-    shape = expression(eta),
-    linetype = expression(eta),
-  )
-) %>%
-  save.plot('power.plt.beta', root.dir = out.dir, w = 4.5, h = 4.5)
-
-power.plt.beta
-```
-
-
-
-
-
-# beta fun ####
-
-## run sims
-
-```{r execute_beta_lrt_sims, cache=T}
-source('../lrt_equations/equations.logitG.R')
-list2env(lrt.logitG.equations, envir = environment())
-
-f.lrt.beta <- function(params) {
-  sim.result <- f.call(sim, params)
-  
-  # a <- 0.85 # looks good w/ eta = -0.4
-  a <- params$a
-  
-  # params$omega <- params$omega + a * (params$omega * f.call(R1, modifyList(params, list(X = 0))) - params$omega)
-  
-  x <- as.data.frame(sim.result)
-  
-  if (params$E.omega) {
-    E.omega <- (params$omega / (1 - params$omega)) *
-      (
-        f.call(pY, modifyList(params, list(X = 0, G = 1))) /
-        (f.call(pY, modifyList(params, list(X = 0, G = 0))))
-      )
-    params$omega <- params$omega + a * (E.omega - params$omega)
-  } else {
-    params$omega <- params$omega + a * (mean(x[x$Y==1,]$G) - params$omega)
-  }
-  
-  # lrt.cc <- run.lrt(sim.result, params, cases.only = F)
-  lrt.co <- run.lrt(sim.result, params, cases.only = T)
-  
-  # fwd.p.val <- lmtest::lrtest(
-  #   glm(Y ~ 1 + X + G + GX, family = binomial(link = 'logit'), data = x),
-  #   glm(Y ~ 1 + X, family = binomial(link = 'logit'), data = x)
-  # )[2,5]
-  fwd.p.val <- NULL
-  
-  wilcox.p.val <- wilcox.test(
-    X ~ G,
-    data = x[x$Y==1,],
-    alternative = 'greater'
-  )$p.value
-  
-  setNames(lrt.co, paste('co', names(lrt.co), sep='.')) %>%
-    # modifyList(setNames(lrt.cc, paste('cc', names(lrt.cc), sep='.'))) %>%
-    modifyList(
-      list(
-        fwd.p.val = fwd.p.val,
-        wilcox.p.val = wilcox.p.val
-      )
-    ) %>%
-    modifyList(z.test(w = params$omega, sim.result)) %>%
-    modifyList(list(o.s = params$omega))
-}
-
-params.beta <- list(
-  n = 5e5,
-  omega = 0.001,
-  alpha = -2.2,
-  # eta = 0.05,
-  # beta = 0.6,
-  gamma = 2.2
-)
-
-n.sims <- 64
-
-lrt.ranges.beta <- expand.grid(
-  beta = c(0.1, 0.5),
-  eta = c(-0.4),
-  a = seq(0.85, 0.95, by = 0.05),
-  E.omega = c(T, F)
-)
-
-dim(lrt.ranges.beta)
-
-lrt.result.beta <- mapply(function(beta, eta, a, E.omega) {
-  params.beta$beta <- beta
-  params.beta$eta <- eta
-  params.beta$a <-a
-  params.beta$E.omega <- E.omega
-  
-  r <- run.lrt.sims(f.lrt.beta, params.beta, n.sims = n.sims)
-  
-  r$param.gamma <- params.beta$gamma
-  r$param.omega <- params.beta$omega
-  r$param.alpha <- params.beta$alpha
-  r$param.beta <- params.beta$beta
-  r$param.eta <- params.beta$eta
-  r$param.a <- params.beta$a
-  r$param.E.omega <- params.beta$E.omega
-  
-  r
-}, lrt.ranges.beta$beta, lrt.ranges.beta$eta, lrt.ranges.beta$a, lrt.ranges.beta$E.omega, SIMPLIFY = F) %>%
-  do.call(bind_rows, .) %>%
-  as_tibble()
-
-# lrt.result.beta <- bind_rows(lrt.result.beta, lrt.result.beta.bak)
-
-saveRDS(lrt.result.beta, file.path(out.dir, 'beta.lrt.result.rds'))
-```
-
-## generate power curve
-
-```{r generate_beta_power_curve}
-lrt.power.beta <- lrt.result.beta %>%
-  mutate(
-    # cc.lrt.p.val = ifelse(cc.gamma < 0, 1, cc.lrt.p.val),
-    co.lrt.p.val = ifelse(co.gamma < 0, 1, co.lrt.p.val)
-  ) %>%
-  select(starts_with('param'), ends_with('.p.val')) %>%
-  pivot_longer(cols = ends_with('.p.val'), names_to = 'test', values_to = 'p.val') %>%
-  mutate(test = gsub('.p.val', '', test)) %>%
-  group_by(param.beta, param.eta, param.a, param.E.omega, test) %>%
-  summarize(power = mean(p.val < 0.05)) %>%
-  ungroup() %>%
-  # filter(test != 'cc.lrt') %>%
-  mutate(test = gsub('^co.', '', test))
-
-# lrt.power.beta.sigmoid <- expand.grid(unique(lrt.power.beta$test), unique(lrt.power.beta$param.beta)) %>%
-#   apply(1, function(vals) {
-#     test <- vals[1]
-#     param.beta <- as.numeric(vals[2])
-#     power.df <- lrt.power.beta[
-#       lrt.power.beta$test == test & lrt.power.beta$param.beta == param.beta,]
-#     my.sigmoid <- fit.sigmoid(power.df$param.gamma, power.df$power) %>%
-#       rename('param.gamma' = x, 'power' = y)
-#     my.sigmoid$test <- test
-#     my.sigmoid$param.beta <- param.beta
-#     my.sigmoid
-#   }) %>%
-#   do.call(bind_rows, .) %>%
-#   as_tibble()
-
-lrt.power.beta$src <- 'data'
-# lrt.power.beta.sigmoid$src <- 'fit'
-
-compare.df.beta <- bind_rows(
-  lrt.power.beta,
-  # lrt.power.beta.sigmoid
-) %>%
-  mutate(param.beta = as.factor(param.beta))
-
-test.colors <- c(
-  'lrt' = '#f42e3d',
-  # 'fwd' = '#2ff481',
-  'wilcox' = '#e32ff4',
-  'z' = '#2ff4e4'
-)
-
-power.plt.beta <- (
-  compare.df.beta %>%
-  ggplot(aes(x = param.a, y = power, color = test)) +
-  scale_color_manual(values = test.colors) +
-  # geom_line(aes(linetype = param.beta), linewidth = 2/3,
-  #   data = subset(compare.df.beta, src == 'fit')
-  # ) +
-  geom_point(aes(shape = param.beta), size = 2,
-    data = subset(compare.df.beta, src == 'data')
-  ) +
-  scale_shape_manual(values = c(
-    '0.1' = 21,
-    '0.3' = 13,
-    '0.5' = 16
-  )) +
-  # scale_linetype_manual(values = c('0.5' = 'solid', '0.3' = 'dashed', '0.1' = 'dotted')) +
-  # scale_x_continuous(limits = c(0, max(gamma.range)), breaks = seq(0, max(gamma.range), length = 7)) +
-    facet_grid(rows = vars(param.eta), cols = vars(param.E.omega)) +
-  labs(
-    x = 'a',
-    y = 'Power',
-    color = 'Test',
-    shape = expression(beta),
-    linetype = expression(beta),
-  )
-) %>%
-  save.plot('lrt.power', root.dir = out.dir, w = 4.5, h = 4.5)
-
-power.plt.beta
 ```
