@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-BATCH_SIZE=2048
 WES_VCF_FIELD_ID=23141
 
 RUN_ID=$1
