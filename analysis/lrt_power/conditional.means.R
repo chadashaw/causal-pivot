@@ -1,6 +1,98 @@
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+source('utils.R')
+
 raise.power <- function(base, exponent) {
   base ** exponent
 }
+
+
+mean.G1 <- function(omega, alpha, beta,gamma, eta, X) {
+  omega/((1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta))*((1 - omega)/(1 + raise.power(exp(1),-alpha - X*beta)) + omega/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta))))
+}
+
+mean.G2 <- function(omega, alpha, beta,gamma, eta, X) {
+  (1 - omega)/((1 + raise.power(exp(1),-alpha - X*beta))*((1 - omega)/(1 + raise.power(exp(1),-alpha - X*beta)) + omega/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta))))
+}
+
+mean.G3 <- function(omega, alpha, beta,gamma, eta, X) {
+  ((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta)))*omega)/((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta)))*(1 - omega) + (1 - 1/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta)))*omega)
+}
+
+mean.G4 <- function(omega, alpha, beta,gamma, eta, X) {
+  ((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta)))*(1 - omega))/((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta)))*(1 - omega) + (1 - 1/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta)))*omega)
+}
+
+params.eG <- list(
+  omega = 1e-3,
+  alpha = -2.2,
+  beta = 0.6,
+  gamma = 1,
+  eta = -0.4,
+  X = 0
+)
+
+beta.range.eG <- seq(0, 2, length.out = 1000)
+
+eG.Y1.Xminus1 <- f.call(mean.G1, modifyList(params.eG, list(X = -1, beta = beta.range.eG)))
+eG.Y1.Xplus1 <- f.call(mean.G1, modifyList(params.eG, list(X = 1, beta = beta.range.eG)))
+eG.Y0.Xminus1 <- f.call(mean.G3, modifyList(params.eG, list(X = -1, beta = beta.range.eG)))
+eG.Y0.Xplus1 <- f.call(mean.G3, modifyList(params.eG, list(X = 1, beta = beta.range.eG)))
+
+eG.labeller <- function(vals) {
+  labels <- list(
+    'cases' = bquote(.("RV") ^ .("+") * .(" Cases")),
+    'controls' = bquote(.("RV") ^ .("+") * .(" Controls"))
+  )
+  
+  sapply(vals, function(val) labels[[val]])
+}
+
+test.colors.eG <- c(
+  'cases' = '#f42e3d',
+  'controls' = '#2ff4e4'
+)
+
+(
+  data.frame(
+    beta = beta.range.eG,
+    oG.1 = (eG.Y1.Xminus1 / (1 - eG.Y1.Xminus1)) / (eG.Y1.Xplus1 / (1 - eG.Y1.Xplus1)),
+    oG.3 = (eG.Y0.Xminus1 / (1 - eG.Y0.Xminus1)) / (eG.Y0.Xplus1 / (1 - eG.Y0.Xplus1))
+  ) %>%
+    pivot_longer(cols = starts_with('oG'), names_to = 'grp', values_to = 'oG') %>%
+    mutate(
+      grp = case_when(
+        grp == 'oG.1' ~ 'cases',
+        grp == 'oG.3' ~ 'controls',
+        .default = 'other'
+      ),
+      grp = factor(grp, levels = names(test.colors.eG)),
+    ) %>%
+    ggplot(aes(x = beta, y = oG, color = grp)) +
+    geom_line() +
+    scale_color_manual(values = test.colors.eG, labels = eG.labeller) +
+    scale_y_continuous(lim = c(0, NA)) +
+    labs(
+      x = expression(bold(beta)),
+      y = 'Odds Ratio',
+      color = 'Group'
+    ) +
+    theme_bw(base_family="Arial") +
+    theme(
+      panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
+      panel.grid.minor = element_line(color = "grey90", linewidth = 0.25),
+      axis.text = element_text(size=8),
+      axis.title = element_text(size=8, family = "Arial", face = "bold"),
+      legend.text = element_text(size=6),
+      legend.title = element_text(size=8),
+    )
+) %>% save.plot(
+  'supp.fig1',
+  root.dir = out.dir,
+  w = 3.34,
+  h = 3.34
+)
 
 mean.X1 <- function(alpha, beta, gamma, eta, X) {
   (-2*raise.power(exp(1),-alpha - X*beta - gamma - X*eta)*(-beta - eta))/
@@ -110,90 +202,3 @@ test.colors.EX <- c(
   w = 3.34,
   h = 3.34
 )
-
-mean.G1 <- function(omega, alpha, beta,gamma, eta, X) {
-  omega/((1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta))*((1 - omega)/(1 + raise.power(exp(1),-alpha - X*beta)) + omega/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta))))
-}
-
-mean.G2 <- function(omega, alpha, beta,gamma, eta, X) {
-  (1 - omega)/((1 + raise.power(exp(1),-alpha - X*beta))*((1 - omega)/(1 + raise.power(exp(1),-alpha - X*beta)) + omega/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta))))
-}
-
-mean.G3 <- function(omega, alpha, beta,gamma, eta, X) {
-  ((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta)))*omega)/((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta)))*(1 - omega) + (1 - 1/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta)))*omega)
-}
-
-mean.G4 <- function(omega, alpha, beta,gamma, eta, X) {
-  ((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta)))*(1 - omega))/((1 - 1/(1 + raise.power(exp(1),-alpha - X*beta)))*(1 - omega) + (1 - 1/(1 + raise.power(exp(1),-alpha - X*beta - gamma - X*eta)))*omega)
-}
-
-params.eG <- list(
-  omega = 1e-3,
-  alpha = -2.2,
-  beta = 0.6,
-  gamma = 1,
-  eta = -0.4,
-  X = 0
-)
-
-beta.range.eG <- seq(0, 2, length.out = 1000)
-
-eG.Y1.Xminus1 <- f.call(mean.G1, modifyList(params.eG, list(X = -1, beta = beta.range.eG)))
-eG.Y1.Xplus1 <- f.call(mean.G1, modifyList(params.eG, list(X = 1, beta = beta.range.eG)))
-eG.Y0.Xminus1 <- f.call(mean.G3, modifyList(params.eG, list(X = -1, beta = beta.range.eG)))
-eG.Y0.Xplus1 <- f.call(mean.G3, modifyList(params.eG, list(X = 1, beta = beta.range.eG)))
-
-eG.labeller <- function(vals) {
-  labels <- list(
-    'cases' = bquote(.("RV") ^ .("+") * .(" Cases")),
-    'controls' = bquote(.("RV") ^ .("+") * .(" Controls"))
-  )
-  
-  sapply(vals, function(val) labels[[val]])
-}
-
-test.colors.eG <- c(
-  'cases' = '#f42e3d',
-  'controls' = '#2ff4e4'
-)
-
-(
-  data.frame(
-    beta = beta.range.eG,
-    oG.1 = (eG.Y1.Xminus1 / (1 - eG.Y1.Xminus1)) / (eG.Y1.Xplus1 / (1 - eG.Y1.Xplus1)),
-    oG.3 = (eG.Y0.Xminus1 / (1 - eG.Y0.Xminus1)) / (eG.Y0.Xplus1 / (1 - eG.Y0.Xplus1))
-  ) %>%
-    pivot_longer(cols = starts_with('oG'), names_to = 'grp', values_to = 'oG') %>%
-    mutate(
-      grp = case_when(
-        grp == 'oG.1' ~ 'cases',
-        grp == 'oG.3' ~ 'controls',
-        .default = 'other'
-      ),
-      grp = factor(grp, levels = names(test.colors.eG)),
-    ) %>%
-    ggplot(aes(x = beta, y = oG, color = grp)) +
-    geom_line() +
-    scale_color_manual(values = test.colors.eG, labels = eG.labeller) +
-    scale_y_continuous(lim = c(0, NA)) +
-    labs(
-      x = expression(bold(beta)),
-      y = 'Odds Ratio',
-      color = 'Group'
-    ) +
-    theme_bw(base_family="Arial") +
-    theme(
-      panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
-      panel.grid.minor = element_line(color = "grey90", linewidth = 0.25),
-      axis.text = element_text(size=8),
-      axis.title = element_text(size=8, family = "Arial", face = "bold"),
-      legend.text = element_text(size=6),
-      legend.title = element_text(size=8),
-    )
-) %>% save.plot(
-  'supp.fig1',
-  root.dir = out.dir,
-  w = 3.34,
-  h = 3.34
-)
-
