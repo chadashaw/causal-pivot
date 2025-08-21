@@ -1,9 +1,3 @@
----
-editor_options: 
-  markdown: 
-    wrap: 72
----
-
 # Genotype Extraction Toolkit (gt_extract)
 
 This directory contains a comprehensive toolkit for extracting,
