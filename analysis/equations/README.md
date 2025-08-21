@@ -16,7 +16,6 @@ The Causal Pivot leverages collider bias induced when conditioning on disease st
 
 #### Model Structure
 - **Forward Model**: `logit(P(Y=1|X,G)) = α + βX + γG + ηXG`
-- **Reverse Model**: `logit(P(G=1|X,Y=1)) = function(α,β,γ,η,ω)`
 
 #### Key Parameters
 - **α**: Intercept (baseline disease risk)
@@ -33,18 +32,18 @@ The Causal Pivot leverages collider bias induced when conditioning on disease st
 - `fisher.info()`: Fisher information matrix calculation
 
 ### 2. LogitG_A Model (`equations.logitG_A.R`)
-**Age-adjusted logistic regression with additional confounders**
+**LogitG w/ additional factor**
 
 #### Model Extension
 - **Forward Model**: `logit(P(Y=1|X,G,A)) = α + βX + γG + ηXG + ζA + κXA`
 - **Additional Parameters**:
-  - **ζ**: Age main effect
-  - **κ**: Age-PRS interaction
+  - **ζ**: Additional factor (A) main effect
+  - **κ**: Additional factor (A) - PRS interaction
 
 #### Use Cases
 - Population stratification control
-- Age-dependent disease relationships
-- Confounding adjustment
+- Additional covariate adjustment
+- Confounding control
 
 ### 3. LiabilityG Model (`equations.liabilityG.R`)
 **Liability threshold model for disease susceptibility**
@@ -175,12 +174,12 @@ mle_fit <- run_mle(model_data, start_params, logitG_equations)
 
 ### Extended Analysis
 ```r
-# Age-adjusted model
+# Additional factor model
 source("equations.logitG_A.R")  
 logitG_A_equations <- define.logitG_A.equations(cases.only = TRUE)
 
-# Include age covariate
-extended_data <- modifyList(model_data, list(A = age_standardized))
+# Include additional covariate
+extended_data <- modifyList(model_data, list(A = additional_factor))
 extended_fit <- run_mle(extended_data, extended_params, logitG_A_equations)
 ```
 
