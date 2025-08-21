@@ -1,9 +1,3 @@
----
-editor_options: 
-  markdown: 
-    wrap: 72
----
-
 # UK Biobank Empirical Analysis
 
 This directory contains the main empirical analysis using UK Biobank
