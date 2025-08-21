@@ -38,7 +38,7 @@ See the [figure index](FIGURE_INDEX.md) for details about which parts of the cod
 - Power analysis across parameter space using simulations
 
 ### Data Sources
-- UK Biobank whole genome sequencing data (≥150k samples)
+- UK Biobank whole genome sequencing data
 - Polygenic risk scores from published GWAS
 - Rare variant annotations from OpenCRAVAT
 
@@ -46,7 +46,7 @@ See the [figure index](FIGURE_INDEX.md) for details about which parts of the cod
 
 Each analysis component has detailed documentation:
 
-- [**Genotype Extraction**](gt_extract/README.md) - Data preprocessing workflow
+- [**Genotype Extraction**](gt_extract/README.md) - UKB WES data extraction and data preprocessing workflow
 - [**Equations**](analysis/equations/README.md) - Mathematical foundations and MLE equations
 - [**Empirical Analysis**](analysis/ukb_pivot/README.md) - Main UK Biobank analysis workflow
 - [**Power Analysis**](analysis/lrt_power/README.md) - Simulation studies and power calculations  
@@ -54,17 +54,25 @@ Each analysis component has detailed documentation:
 ## Reproducibility
 
 ### Local Execution
-All analyses require preprocessed UK Biobank data generated using the gt_extract toolkit. No example data is provided due to data use restrictions. See component READMEs for specific requirements.
+All analyses require preprocessed UK Biobank data generated using the gt_extract toolkit.
+No example data is provided due to data use restrictions.
+See component READMEs for specific requirements.
 
 ### Cloud Execution
-The original analysis used DNAnexus cloud platform for large-scale computations. See [genotype extraction documentation](gt_extract/README.md) for cloud execution details.
+The original analysis used DNAnexus cloud platform for large-scale computations.
+See [genotype extraction documentation](gt_extract/README.md) for cloud execution details.
 
 ### Environment Management
-This project uses `renv` for reproducible package management across multiple R projects. Navigate to each analysis directory and run `renv::restore()` to install exact package versions for that component.
+This project uses `renv` for reproducible package management across multiple R projects.
+Navigate to each analysis directory and run `renv::restore()` to install exact package versions for that component.
 
 ## Citation
 
-Shaw CA, Williams CJ, Tan T, Illera D, Di N, Shulman J, Belmont JW. The Causal Pivot: A structural approach to genetic heterogeneity and variant discovery in complex diseases. *The American Journal of Human Genetics*. 2025;112(9):1-15. doi:10.1016/j.ajhg.2025.07.012
+Shaw CA, Williams CJ, Tan T, Illera D, Di N, Shulman J, Belmont JW.
+The Causal Pivot: A structural approach to genetic heterogeneity and variant discovery in complex diseases.
+*The American Journal of Human Genetics*.
+2025;112(9):1-15.
+doi:10.1016/j.ajhg.2025.07.012
 
 ## Contact
 
