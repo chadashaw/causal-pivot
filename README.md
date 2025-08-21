@@ -23,65 +23,7 @@ and performed comprehensive power analysis using simulations.
 ├── gt_extract/             # Genotype extraction workflow (DNAnexus)
 ```
 
-
-## Quick Start
-
-### Prerequisites
-
-- R (≥4.0) with renv package management
-- Required R packages specified in `renv.lock`
-
-### Setup
-
-1. Clone the repository:
-```bash
-git clone [repository-url]
-cd causal-pivot
-```
-
-2. Restore R environment:
-```r
-renv::restore()
-```
-
-3. Set up data directories (see component READMEs for details)
-
-### Running the Analysis
-
-#### Main Empirical Analysis
-```r
-# Navigate to analysis directory
-setwd("analysis/ukb_pivot")
-
-# Run complete analysis pipeline
-source("main.R")
-```
-
-#### Power Analysis
-```r
-# Navigate to power analysis directory  
-setwd("analysis/lrt_power")
-
-# Run power simulations
-rmarkdown::render("lrt.sim.Rmd")
-```
-
-## Key Results and Figures
-
-### Main Figures
-- **Figure 2**: 4-panel power analysis showing LRT performance vs. competing methods
-- **Figure 3**: Collider effects across PRS tertiles and mutation type distributions  
-- **Figure 4**: Ancestry control analysis using k-nearest neighbors
-- **Figure 5**: Genetic burden analysis in lysosomal storage disease pathway
-
-### Supplemental Figures
-- **S1-S5**: Theoretical foundations and data characterization
-- **S6, S8**: Empirical permutation contour plots for statistical validation
-- **S7**: Control variant analysis (negative control)
-- **S10**: Power analysis with confounders
-- **S12**: Age-stratified analysis
-
-Figures are generated in `analysis/ukb_pivot/plots/` with separate directories for main and supplemental figures.
+See the [figure index](FIGURE_INDEX.md) for details about which parts of the codebase generate which figures from the paper.
 
 ## Methods Summary
 
@@ -104,10 +46,10 @@ Figures are generated in `analysis/ukb_pivot/plots/` with separate directories f
 
 Each analysis component has detailed documentation:
 
+- [**Genotype Extraction**](gt_extract/README.md) - Data preprocessing workflow
+- [**Equations**](analysis/equations/README.md) - Mathematical foundations and MLE equations
 - [**Empirical Analysis**](analysis/ukb_pivot/README.md) - Main UK Biobank analysis workflow
 - [**Power Analysis**](analysis/lrt_power/README.md) - Simulation studies and power calculations  
-- [**Equations**](analysis/equations/README.md) - Mathematical foundations and MLE equations
-- [**Genotype Extraction**](gt_extract/README.md) - Data preprocessing workflow
 
 ## Reproducibility
 
