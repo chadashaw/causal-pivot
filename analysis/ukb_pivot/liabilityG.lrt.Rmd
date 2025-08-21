@@ -1,12 +1,19 @@
 ---
-title: "liabilityG LRT"
-output: html_document
+title: "LiabilityG Likelihood Ratio Test"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
 ---
 
-```{r lrt_liability_deps}
-library(paletteer, quietly = t, warn.conflicts = f)
-library(waffle, quietly = t, warn.conflicts = f)
-library(patchwork, quietly = t, warn.conflicts = f)
+```{r lrt_liability_deps, include=F}
+library(paletteer, quietly = t, warn.conflicts = F)
+library(waffle, quietly = t, warn.conflicts = F)
+library(patchwork, quietly = t, warn.conflicts = F)
 source("utils/main.R")
 source("utils/data.R")
 source("utils/lrt.R")
@@ -23,17 +30,17 @@ rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
 
 ## Liability G
 
-```{r, echo=F}
+```{r set_mle_perms, echo=F}
 if(!exists("n.mle.perms")) n.mle.perms <- 8
 writeLines(paste0("n.mle.perms=", n.mle.perms), con = file.path(OUT_DIR, "n.mle.perms"))
 ```
 
 The equations for the Logit G model are given in
-[equations.liabilityG.R](../lrt_equations/equations.liabilityG.R).
+[equations.liabilityG.R](../equations/equations.liabilityG.R).
 
-```{r lrt_liabilityG_HC190, cache=T}
+```{r lrt_liabilityG_HC190, warning=F, message=F}
 # source MLE functions and load into local environment ####
-source('../lrt_equations/equations.liabilityG.R')
+source('../equations/equations.liabilityG.R')
 lrt.liabilityG.equations <- define.liabilityG.equations(cases.only=T)
 
 # perform MLE testing for HC190 ####
@@ -172,7 +179,7 @@ liabilityG.mle.p.vals <- inner_join(liabilityG.mle.run, liabilityG.perm.result, 
       axis_titles = 'collect'
     )
 ) %>%
-  save.plot('liabilityG.MLE.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 3.34, h = 3.34)
+  save.plot('supp.fig8', root.dir = PLOTS_DIR, sub.dir = 'supplemental', w = 3.34, h = 3.34)
   
 # save results ####
 liabilityG.lrt.result <- list(

@@ -656,8 +656,9 @@ logitG_A.compare.df <- augment.sigmoid(logitG_A.power.df, 'param.gamma') %>%
     )
 ) %>%
   save.plot(
-    'lrt.logitG_A.power',
+    'supp.fig10',
     root.dir = out.dir,
+    sub.dir = 'supplemental',
     w = 3.346457,
     h = 3.346457
   )

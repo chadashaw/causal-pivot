@@ -20,9 +20,7 @@ source("./utils/data.R")
 
 ## Initialize Data and Constants
 
-**NOTE:** this can take a while...
-
-Initialize analytic products from variant extraction workflow.
+Post-process source data from variant extraction workflow.
 See [init.R](./init.R) for initial data transforms.
 This creates multiple data objects and saves them in the
 configured `SRC_DATA_DIR`:
@@ -36,6 +34,8 @@ To run an analysis from a new set of objects,
 set a new `SRC_DATA_DIR` or delete the files.
 
 ```{r init_data, include=F}
+# NOTE: this can take a while...
+
 main.objects <- c('cohort.meta', 'annotations', 'geno.mtx') 
 
 # get path to main data rds object (e.g. geno.mtx.rds -> geno.mtx)
@@ -59,9 +59,9 @@ for (obj in main.objects) {
 ## Load PRS
 
 Load PRS scores.
-Samples missing PRS data are excluded.
+Observations missing any value across the 3 PRS are excluded.
 
-```{r read_prs}
+```{r read_prs, warning=F, message=F}
 # load and format prs data ####
 
 # our main PRS source is the UKB, but we want to be able to use others
@@ -148,7 +148,7 @@ cohort.meta <- cohort.meta[na.omit(match(prs$sample.id, cohort.meta$sample.id)),
 
 ## Load LSD Genes
 
-```{r}
+```{r load_lsd_genes}
 # load gene list for Parkinson's LSD genetic burden analysis
 lsd.genes <- readLines(file.path(SRC_DATA_DIR, 'LSD_human_genes.txt'))
 ```
@@ -431,10 +431,10 @@ saveRDS(prs.sig.marker.ids, file.path(DATA_DIR, 'prs.sig.marker.ids.rds'))
 
 # print results ####
 
-cat("# Pathogenic Markers w/ Sig. PRS. Assoc. per Gene\n")
+cat("Pathogenic Markers w/ Sig. PRS. Assoc. per Gene:\n")
 table(gene.lkps$gene.to.grp[rv.flags[rv.flags$marker.id %in% prs.sig.marker.ids & rv.flags$class.positive,]$gene])
 
-cat("# Control Markers w/ Sig. PRS. Assoc. per Gene\n")
+cat("Control Markers w/ Sig. PRS. Assoc. per Gene:\n")
 table(gene.lkps$gene.to.grp[rv.flags[rv.flags$marker.id %in% prs.sig.marker.ids & rv.flags$class.rare.synonymous,]$gene])
 
 # flag pathogenic markers - class.positive & !prs.associated ####
@@ -590,7 +590,7 @@ cv.cohort.dfs <- purrr::imap(cohorts, function(cohort, cohort.name) {
 
 ### Save Results
 
-```{r}
+```{r save_results}
 # save results ####
 saveRDS(cohorts, file = file.path(DATA_DIR, 'cohorts.rds'))
 saveRDS(cohort.lkps, file = file.path(DATA_DIR, 'cohort.lkps.rds'))
@@ -605,5 +605,10 @@ saveRDS(rv.prs.df, file = file.path(OUT_DIR, 'rv.prs.df.rds'))
 saveRDS(cohort.dfs, file = file.path(OUT_DIR, 'cohort.dfs.rds'))
 saveRDS(cv.prs.df, file = file.path(OUT_DIR, 'cv.prs.df.rds'))
 saveRDS(cv.cohort.dfs, file = file.path(OUT_DIR, 'cv.cohort.dfs.rds'))
+```
+
+```{r rm_large_object, echo=F, results=F}
+rm(list=main.objects)
+gc()
 ```
 

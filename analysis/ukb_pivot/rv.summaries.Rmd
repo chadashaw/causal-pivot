@@ -34,7 +34,13 @@ prs.sig.marker.ids <- readRDS(file.path(DATA_DIR, 'prs.sig.marker.ids.rds'))
 Export pathogenic rare variant data to Excel
 for supplemental materials and analysis.
 
-```{r export_excel, cache=T}
+```{r}
+rv.summary.path <- file.path(OUT_DIR, 'rv.summary.xlsx')
+```
+
+
+```{r export_excel, eval=!file.exists(rv.summary.path), warning=F, message=F}
+
 local({
   all.mtx <- as.matrix(readRDS(file.path(DATA_DIR, 'geno.mtx.rds'))[,rv.flags$marker.id])
   wb <- openxlsx::createWorkbook()
@@ -148,45 +154,7 @@ local({
     }
   })
   
-  # prs.cohort.summary.df <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
-  #   gene.grp <- cohort.lkps$gene.grp[cohort.name]
-  #   cohort.rv.marker.ids <- rv.flags[rv.flags$gene == gene.grp & rv.flags$pathogenic,]$marker.id
-  #   cohort.gts <- as.data.frame(as.matrix(rv.mtx[cohort.df$sample.id,cohort.rv.marker.ids] ))
-  #   n.control <- sum(!cohort.df$case)
-  #   n.case <- sum(cohort.df$case)
-  #   purrr::imap(cohort.gts, function(gts, marker.id) {
-  #     cohort.df$gt <- gts[match(cohort.df$sample.id, rownames(cohort.gts))]
-  #     
-  #     freq.df <-  cohort.df %>%
-  #       group_by(case) %>%
-  #       summarize(f = mean(gt)) %>%
-  #       ungroup()
-  #     
-  #     cohort.df %>%
-  #       group_by(case) %>%
-  #       filter(gt == 1) %>%
-  #       summarize(prs.mean = mean(prs), n = n()) %>%
-  #       ungroup() %>%
-  #       mutate(marker.id = marker.id) %>%
-  #       ungroup() %>%
-  #       inner_join(freq.df, by = 'case')
-  #   }) %>%
-  #       do.call(bind_rows, .)
-  # }) %>% concat.df.list(key.cols = 'cohort.name') %>%
-  #   mutate(case = ifelse(case, 'case', 'control')) %>%
-  #   pivot_wider(id_cols = c('cohort.name', 'marker.id'), names_from = 'case', values_from = c('prs.mean', 'f', 'n')) %>%
-  #   select(
-  #     `Marker` = 'marker.id',
-  #     `Cohort` = 'cohort.name',
-  #     `Mean PRS (Controls)` = 'prs.mean_control',
-  #     `Mean PRS (Cases)` = 'prs.mean_case',
-  #     `RV+ Count (Controls)` = 'n_control',
-  #     `RV+ Count (Cases)` = 'n_case',
-  #     `RV+ Frequency (Controls)` = 'f_control',
-  #     `RV+ Frequency (Cases)` = 'f_case' 
-  #   )
-  
-  openxlsx::saveWorkbook(wb, file.path(OUT_DIR, 'rv.summary.xlsx'), overwrite = T)
+  openxlsx::saveWorkbook(wb, rv.summary.path, overwrite = T)
 })
 ```
 
@@ -196,10 +164,10 @@ local({
 
 Plot pathogenic rare variants by sequence ontology.
 
-A waffle plot gives an intuitive feel for proportion of variants by sequence ontology
-showing signals are not dominated by a single mutation type (`MT`).
+A waffle plot gives an intuitive feel for proportion of variants by sequence ontology.
+This heterogeneity indicates signals are not dominated by a single mutation type (`MT`).
 
-```{r plot_variant_mutation_type_waffle, cache=T}
+```{r plot_variant_mutation_type_waffle, warning=F, message=F}
 # create positive variants data frame w/ mutation types ####
 
 mt.df <- left_join(
@@ -262,12 +230,10 @@ positive variant appears.
 This plot further shows the causal pivot signal is not carried by a single
 functional type.
 
-```{r plot_variant_spread_histogram, cache=T}
+```{r plot_variant_spread_histogram, warning=F, message=F}
 # create dataframe counting positive samples per variants w/ SO annotation ####
 
 cases <- rv.prs.df %>% filter((!is.na(HC190) & HC190) | (!is.na(BC) & BC) | (PD & !is.na(PD))) %>% pull(sample.id)
-
-rv.prs.df %>% filter(sample.id %in% names(cohort.marks[cohort.marks == 'PD']) )
 
 alt.counts <- alt.sums.by.sample(rv.mtx, cohort.marks) %>%
   mtx.to.df('cohort', 'marker.id', 'alt.count') %>%
@@ -340,9 +306,9 @@ mt.dist <- (
   )
 ) %>%
   save.plot(
-    'mutation_type.distribution',
+    'fig3B',
     root.dir = PLOTS_DIR,
-    sub.dir = 'supplementary',
+    sub.dir = 'misc',
     w = 6.5,
     h = 4.5
   )

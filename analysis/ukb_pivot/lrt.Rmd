@@ -1,6 +1,6 @@
 ---
-title: "lrt"
-date: "`r format(sys.time(), '%d %b, %y, %h:%m')`"
+title: "LogitG Likelihood Ratio Test"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
 output:
   pdf_document:
     number_sections: yes
@@ -10,10 +10,10 @@ output:
     toc: yes
 ---
 
-```{r lrt_deps, include=f}
-library(paletteer, quietly = t, warn.conflicts = f)
-library(waffle, quietly = t, warn.conflicts = f)
-library(patchwork, quietly = t, warn.conflicts = f)
+```{r lrt_deps, include=F}
+library(paletteer, quietly = F, warn.conflicts = F)
+library(waffle, quietly = F, warn.conflicts = F)
+library(patchwork, quietly = F, warn.conflicts = F)
 source("utils/main.R")
 source("utils/data.R")
 source("utils/lrt.R")
@@ -27,33 +27,33 @@ rv.prs.df <- readRDS(file.path(OUT_DIR, 'rv.prs.df.rds'))
 ```
 
 
-the causal pivot maximum likelihood estimation (mle) procedure is applied
-to estimate gamma (the coefficient for g) and eta (the coefficient for x * g)
-of the reverse logistic model. a chi-squared test statistic is calculated
-from the resulting maximum log likelihood ratio (lr). empirical data and logistic regression
-is used to derive estimates for model parameters.
+Apply the Causal Pivot maximum likelihood estimation (MLE) procedure
+to estimate gamma (the coefficient for G) and eta (the coefficient for X * G)
+of the reverse logistic model. A chi-squared test statistic is calculated
+from the resulting maximum log likelihood ratio (LR). Empirical data and logistic regression
+are used to derive estimates for model parameters.
 
-mle is performed via `optim()` using the build-in `sann` simulated
-annealing algorithm. in order to correct for variability found in some areas of
-the parameter space, mle is performed multiple times and the
-median result is used. 
+MLE is performed via `optim()` using the built-in `SANN` simulated
+annealing algorithm. To correct for variability found in some areas of
+the parameter space, MLE is performed multiple times and the
+median result is used.
 
-afterwards permutation analysis of the mle statistic under g (the
+Permutation analysis of the MLE statistic under G (the
 response variable in the reverse model) is performed.
-the final test statistic is a simple permutation z-statistic
-using the lr.
+The final test statistic is a simple permutation z-statistic
+using the LR.
 
-lower permutation count reduces computation time,
-but increases variability of results.
+**Permutation Parameters:**
 
-at least 256 permutations recommended for consistent results.
+- Lower permutation count reduces computation time but increases variability
+- At least 256 permutations recommended for consistent results
 
-```{r, echo=f}
+```{r set_mle_perms, echo=F}
 if(!exists("n.mle.perms")) n.mle.perms <- 32
 writeLines(paste0("n.mle.perms=", n.mle.perms), con = file.path(OUT_DIR, "n.mle.perms"))
 ```
 
-## define helper functions
+## Define Helper Functions
 
 ```{r define_lrt_helpers}
 make.lrt.data <- function(rv.prs.df, cohort.df, gene.grp) {
@@ -185,9 +185,9 @@ plot.mle.perm.contour <- function(lrt.result) {
   lapply(names(cohorts), function(my.cohort.name) {
     c(
       lapply(gene.lkps$grp.to.genes, function(my.gene.grp) {
-        print(paste(my.cohort.name, my.gene.grp))
         mle.perm <- lrt.result$mle.perm %>%
-          filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name)
+          filter(gene.grp == my.gene.grp & cohort.name == my.cohort.name) %>%
+          filter(abs(gamma) <= 2.5 & abs(eta) <= 1.0)
         
         if (nrow(mle.perm) == 0) {
           return(ggplot())
@@ -274,16 +274,16 @@ save.lrt.result.xl <- function(lrt.result, path) {
 }
 ```
 
-## logit g
+## LogitG
 
-the equations for the logit g model are given in
-[equations.logitG.R](../lrt_equations/equations.logitG.R).
+The equations for the LogitG model are given in
+[equations.logitG.R](../equations/equations.logitG.R).
 
-### perform lrt permutations
+### Perform LRT Permutations
 
-```{r lrt_logitG_3_cohorts, cache=t}
+```{r lrt_logitG_3_cohorts}
 # source mle functions and load into local environment ####
-source('../lrt_equations/equations.logitG.R')
+source('../equations/equations.logitG.R')
 logitG.lrt.equations <- define.logitG.equations(cases.only=T)
 
 # perform mle testing under all cohorts ####
@@ -336,29 +336,29 @@ logitG.lrt.result <- postprocess.lrt.run(logitG.lrt.run)
 saveRDS(logitG.lrt.result, file.path(OUT_DIR, 'logitG.mle.result.rds'))
 ```
 
-### plot results
+### Plot Results
 
-```{r, logitG_plots}
+```{r logitG_plots, warning=F, message=F}
 logitG.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG.mle.result.rds'))
 
 plot.mle.perm.contour(logitG.lrt.result) %>%
-  save.plot('logitG.mle.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 6.5, h = 6.5)
+  save.plot('supp.fig6', root.dir = PLOTS_DIR, sub.dir = 'supplemental', w = 6.5, h = 6.5)
 
 plot.mle.perm.hist(logitG.lrt.result) %>%
   save.plot('logitG.mle.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 ```
 
 
-## logit g w/ age
+## LogitG with Age
 
-the equations for the logit g model w/ a (age) are given in
-[equations.logitG_A.R](../lrt_equations/equations.logitG_A.R).
+The equations for the LogitG model with A (age) are given in
+[equations.logitG_A.R](../equations/equations.logitG_A.R).
 
-### perform logitG_A permutations
+### Perform LogitG_A Permutations
 
-```{r lrt_logitG_A_3_cohorts, cache=t, eval = F}
+```{r lrt_logitG_A_3_cohorts}
 # source mle functions and load into local environment ####
-source('../lrt_equations/equations.logitG_A.R')
+source('../equations/equations.logitG_A.R')
 logitG_A.lrt.equations <- define.logitG_A.equations(cases.only=T)
 
 # perform mle testing under all cohorts ####
@@ -411,9 +411,9 @@ logitG_A.lrt.result <- postprocess.lrt.run(logitG_A.lrt.run)
 saveRDS(logitG_A.lrt.result, file.path(OUT_DIR, 'logitG_A.mle.result.rds'))
 ```
 
-### plot results
+### Plot Results
 
-```{r, lrt_logitG_A_plots}
+```{r lrt_logitG_A_plots, warning=F, message=F}
 logitG_A.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG_A.mle.result.rds'))
 
 plot.mle.perm.contour(logitG_A.lrt.result) %>%
@@ -423,20 +423,21 @@ plot.mle.perm.hist(logitG_A.lrt.result) %>%
   save.plot('logitG_A.mle.permutation.histogram', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)
 ```
 
-## perform age partitioned lrt permutations
+## Age-Partitioned LRT Permutations
 
-```{r lrt_logitG_age_partition_cohorts, cache=t}
+Perform age-stratified analysis by partitioning cohorts into
+age tertiles and running separate LRT analyses.
+
+```{r lrt_logitG_age_partition_cohorts, warning=F}
 # source mle functions and load into local environment ####
-source('../lrt_equations/equations.logitG.R')
+source('../equations/equations.logitG.R')
 logitG.lrt.equations <- define.logitG.equations(cases.only=T)
 
 # perform mle testing under all cohorts ####
 age.half.lrt.results <- seq(2) %>%
   purrr::map(~{
     logitG.age.low.lrt.run <- purrr::imap(cohort.dfs, function(cohort.df, cohort.name) {
-      print(paste0('logitG.age.low: ', cohort.name))
       purrr::map(cohort.lkps$gene.grp, function(gene.grp) {
-        print(paste0('gene.grp: ', gene.grp))
         lrt.data <- make.lrt.data(rv.prs.df, cohort.df, gene.grp) %>%
           mutate(age.half = ntile(A, 2)) %>%
           filter(age.half == .x)
@@ -484,13 +485,11 @@ save.lrt.result.xl(age.half.lrt.results[[1]], file.path(OUT_DIR, 'logitG.age.low
 save.lrt.result.xl(age.half.lrt.results[[2]], file.path(OUT_DIR, 'logitG.age.high.lrt.result.xlsx'))
 ```
 
-### plot results
+### Plot Results
 
-```{r, logitG_plots}
+```{r logitG_age_split_plots, warning=F, message=F}
 logitG.age.low.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))
 logitG.age.high.lrt.result <- readRDS(file.path(OUT_DIR, 'logitG.age.high.mle.result.rds'))
-
-logitG.age.high.lrt.result$mle.p.vals
 
 plot.mle.perm.contour(logitG.age.low.lrt.result) %>%
   save.plot('logitG.age.low.mle.permutation.contour', root.dir = PLOTS_DIR, sub.dir = 'maximum.likelihood.estimation', w = 4.5 * 2, h = 4.5 * 2)

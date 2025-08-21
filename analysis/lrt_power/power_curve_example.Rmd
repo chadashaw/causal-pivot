@@ -1,0 +1,241 @@
+---
+title: "Power Curve Example"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+---
+
+# Simple Power Curve Example for Causal Pivot LRT
+
+Demonstrate how to generate power curves for the Causal Pivot
+likelihood ratio test by varying gamma (rare variant effect) on the x-axis
+and showing different eta values (causal pivot effect) as solid/dashed lines.
+
+## Load Dependencies
+
+```{r power_curve_deps, warning=F, message=F}
+library(dplyr)
+library(ggplot2)
+library(parallel)
+
+# Load utility functions and equations
+source("utils.R")
+source("../equations/equations.logitG.R")
+```
+
+## Define Parameters
+
+Set base parameters similar to liability analysis in lrt.sim.Rmd.
+
+```{r define_parameters}
+# Base parameters (similar to liability analysis in lrt.sim.Rmd)
+base.params <- list(
+  alpha = -2.2,    # baseline logit 
+  beta = 0.6,      # PRS effect
+  omega = 0.001,   # rare variant frequency (0.1%)
+  n = 5e5        # sample size
+)
+
+# Parameter ranges for power curves
+gamma.range <- seq(0.0, 1.2, length.out = 9)  # vary rare variant effect
+eta.values <- c(-0.4, 0)                       # causal pivot effects (null and negative)
+n.sims <- 256  # simulations per parameter combination
+
+# Set up equation system
+logitG.equations <- define.logitG.equations(cases.only = T)
+
+# Create parameter grid
+param.grid <- expand.grid(
+  gamma = gamma.range,
+  eta = eta.values
+)
+
+cat("Running power analysis with parameter grid...\n")
+cat(sprintf("Gamma range: %.1f to %.1f (n=%d)\n", min(gamma.range), max(gamma.range), length(gamma.range)))
+cat(sprintf("Eta values: %s\n", paste(eta.values, collapse = ", ")))
+cat(sprintf("Simulations per point: %d\n", n.sims))
+```
+
+## Define Helper Functions
+
+```{r define_helpers}
+# Function to run LRT simulation for specific parameters
+run.lrt.simulation <- function(gamma, eta, base.params, n.sims) {
+  params <- modifyList(base.params, list(gamma = gamma, eta = eta))
+  
+  # Run simulations
+  results <- replicate(n.sims, {
+    # Simulate data
+    sim.data <- sim(
+      n = params$n,
+      alpha = params$alpha,
+      beta = params$beta,
+      gamma = params$gamma,
+      eta = params$eta,
+      omega = params$omega
+    )
+    
+    # Prepare LRT data
+    lrt.data <- list(
+      X = sim.data$X,
+      Y = sim.data$Y,
+      G = sim.data$G
+    )
+    
+    # Run LRT
+    lrt.result <- run.lrt(logitG.equations, lrt.data, params)
+    
+    # Return p-value
+    lrt.result$lrt.p.val
+  }, simplify = T)
+  
+  # Calculate power (proportion of p < 0.05)
+  power <- mean(results < 0.05, na.rm = T)
+  
+  list(
+    gamma = gamma,
+    eta = eta,
+    power = power,
+    n.significant = sum(results < 0.05, na.rm = T),
+    n.total = sum(!is.na(results))
+  )
+}
+```
+
+## Run Power Analysis
+
+```{r run_power_analysis, warning=F, message=F}
+# Run power analysis
+power.results <- mapply(
+  function(gamma, eta) run.lrt.simulation(gamma, eta, base.params, n.sims),
+  param.grid$gamma,
+  param.grid$eta,
+  SIMPLIFY = F
+) %>%
+  bind_rows()
+
+# Fit sigmoid curves for smooth lines (as in original analysis)
+power.sigmoid <- expand.grid(
+  eta = unique(power.results$eta)
+) %>%
+  apply(1, function(vals) {
+    eta.val <- as.numeric(vals[1])
+    power.subset <- power.results[power.results$eta == eta.val, ]
+    
+    # Fit smooth curve
+    sigmoid.fit <- fit.sigmoid(
+      power.subset$gamma, 
+      power.subset$power, 
+      res.fit = 0.01
+    ) %>%
+      rename(gamma = x, power = y)
+    
+    sigmoid.fit$eta <- eta.val
+    sigmoid.fit$src <- 'fit'
+    sigmoid.fit
+  }) %>%
+  bind_rows()
+
+# Add source labels
+power.results$src <- 'data'
+
+# Combine data and fits
+plot.data <- bind_rows(power.results, power.sigmoid) %>%
+  mutate(eta = as.factor(eta))
+```
+
+## Generate Power Curve Plot
+
+```{r generate_power_plot, warning=F, message=F}
+# Create power curve plot
+power.plot <- plot.data %>%
+  ggplot(aes(x = gamma, y = power)) +
+  # Fitted curves
+  geom_line(
+    aes(linetype = eta),
+    data = subset(plot.data, src == 'fit'),
+    linewidth = 1.2,
+    color = "steelblue"
+  ) +
+  # Data points
+  geom_point(
+    aes(shape = eta),
+    data = subset(plot.data, src == 'data'),
+    size = 2.5,
+    color = "steelblue"
+  ) +
+  # Styling
+  scale_linetype_manual(
+    name = expression(eta),
+    values = c('0' = 'solid', '-0.4' = 'dashed'),
+    labels = c('0' = '0 (null)', '-0.4' = '-0.4')
+  ) +
+  scale_shape_manual(
+    name = expression(eta),
+    values = c('0' = 16, '-0.4' = 21),
+    labels = c('0' = '0 (null)', '-0.4' = '-0.4')
+  ) +
+  scale_x_continuous(
+    name = expression(gamma ~ "(rare variant effect)"),
+    limits = c(0, 1.2),
+    breaks = seq(0, 1.2, by = 0.2)
+  ) +
+  scale_y_continuous(
+    name = "Statistical Power",
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.2)
+  ) +
+  labs(
+    title = "Causal Pivot LRT Power Analysis",
+    subtitle = sprintf("n = %s, ω = %.3f%%, β = %.1f", 
+                      scales::comma(base.params$n), 
+                      base.params$omega * 100, 
+                      base.params$beta)
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom"
+  )
+
+print(power.plot)
+```
+
+## Save Results
+
+```{r save_results, warning=F, message=F}
+# Save plots
+out.dir <- "output"
+dir.create(out.dir, showWarnings = F, recursive = T)
+
+ggsave(
+  filename = file.path(out.dir, "power_curve_example.pdf"),
+  plot = power.plot,
+  width = 6.5, height = 4.875, units = "in"
+)
+
+ggsave(
+  filename = file.path(out.dir, "power_curve_example.png"),
+  plot = power.plot,
+  width = 6.5, height = 4.875, units = "in", dpi = 300
+)
+
+# Print results summary
+cat("\n=== Power Analysis Results ===\n")
+print(power.results)
+
+cat(sprintf("\nBase parameters:\n"))
+cat(sprintf("  Sample size: %s\n", scales::comma(base.params$n)))
+cat(sprintf("  α (baseline): %.2f\n", base.params$alpha))
+cat(sprintf("  β (PRS effect): %.2f\n", base.params$beta))
+cat(sprintf("  ω (RV frequency): %.3f%%\n", base.params$omega * 100))
+
+cat("\nPlots saved to output/ directory\n")
+```

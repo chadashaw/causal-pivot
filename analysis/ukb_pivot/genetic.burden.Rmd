@@ -102,7 +102,7 @@ list(
 ) %>%
   saveRDS( file = file.path(OUT_DIR, 'fig5.rds'))
 ```
-```{r lsd_burden_plots}
+```{r lsd_burden_plots, warning=F, message=F}
 # create PD/LSD genetic load collider boxplot ####
 
 lsd.burden.df <- lsd.df %>%
@@ -185,9 +185,13 @@ lsd.burden.p.stars.grob <- grid::textGrob(
   save.plot(
     'fig5',
     root.dir = PLOTS_DIR,
-    sub.dir = 'composed',
+    sub.dir = 'main',
     w = 6.5,
     h = 3.65625
   )
 ```
 
+```{r rm_large_object, echo=F, results=F}
+rm(list=c('annotations', 'geno.mtx'))
+gc()
+```

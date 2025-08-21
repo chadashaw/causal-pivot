@@ -34,7 +34,7 @@ Demonstrate unconditional (Case + Control / CC) independence of RV status and PR
 
 ### Pathogenic Variants
 
-```{r plot_collider_scatter}
+```{r plot_collider_scatter, warning=F, message=F}
 # massage cohort.dfs into a single dataframe containing correctly paired RV/PRS ####
 
 cc.prs.df <- concat.df.list(cohort.dfs, key.cols = 'cohort.name')
@@ -117,7 +117,7 @@ cc.scatter
 
 Show the same for control variants.
 
-```{r control_collider_scatter, eval = F}
+```{r control_collider_scatter, warning=F, message=F}
 # massage cohort.dfs into a single dataframe containing correctly paired RV/PRS ####
 
 # control variant case+control
@@ -200,7 +200,7 @@ the diagonal (top-left to bottom-right), where the cohort/PRS is paired with it'
 
 ### Pathogenic Variants
 
-```{r tertiles_plot_calc}
+```{r tertiles_plot_calc, warning=F, message=F}
 # massage data w/ prs tertiles ####
 
 # logitG.mle.p.vals <- readRDS(file.path(OUT_DIR, 'logitG.mle.result.rds'))$mle.p.vals
@@ -305,7 +305,7 @@ tertiles.3x3 <- (
       linetype = guide_legend(order = 2)
     )
 ) %>%
-   save.plot('tertiles.3x3', w = 3.75, h = 2.5, root.dir = PLOTS_DIR, sub.dir = 'collider')
+   save.plot('fig3A', w = 3.75, h = 2.5, root.dir = PLOTS_DIR, sub.dir = 'misc')
 
 tertiles.3x3
 ```
@@ -314,7 +314,7 @@ tertiles.3x3
 
 Plot the same for control variants.
 
-```{r control_tertiles_plot_calc}
+```{r control_tertiles_plot_calc, warning=F, message=F}
 # massage data w/ prs tertiles ####
 
 n.cv.events.df <- cv.prs.df %>%
@@ -384,14 +384,14 @@ n.cv.events.df$cohort <- factor(n.cv.events.df$cohort, levels=names(cohorts))
      w = 3.34,
      h = 2.505,
      root.dir = PLOTS_DIR,
-     sub.dir = 'collider'
+     sub.dir = 'supplementary'
    )
 ```
 
 
 ### Pathogenic Variants - Age Restricted
 
-```{r tertiles_plot_calc_age}
+```{r tertiles_plot_calc_age, warning=F, message=F}
 # massage data w/ prs tertiles ####
 
 logitG.age.low.mle.p.vals <- readRDS(file.path(OUT_DIR, 'logitG.age.low.mle.result.rds'))$mle.p.vals
@@ -513,28 +513,20 @@ for (age.n.tile in seq(n.tiles)) {
     age.tertiles.3x3[[1]] + age.tertiles.3x3[[2]]
   )
   +
-    plot_annotation(tag_levels = 'A', tag_suffix = ')')
+    plot_annotation(tag_levels = 'A', tag_suffix = '')
 ) %>%
    save.plot(
-     'age.3x3.tertiles',
+     'supp.fig12',
      root.dir = PLOTS_DIR,
-     sub.dir = 'collider',
+     sub.dir = 'supplemental',
      w = 6.5,
      h = 6.5*9/16
     )
-
-
-# There a number of possibilities here:
-# 
-#     Fewer pathogenic RV in older samples – attrition by reduced survival?
-#     Reduced effect size of PRS in older people – diluted by non-genetic factors
-#     Reduced effect size of RV in older people – suppressor variants either within the same locus or at alternative interacting loci
 ```
 
 ## Compose UKBB Collider Summary Plot
 
-```{r collider_summary_plot}
-# panel.a <- cc.scatter + composed.theme + scale_y_continuous(limits = c(-1, 1), breaks = c(-1, 0, 1))
+```{r collider_summary_plot, warning=F, message=F}
 panel.a <- tertiles.3x3
 panel.b <- mt.dist + 
   theme(
@@ -575,7 +567,7 @@ p.stars.grob <- grid::textGrob(
   ) /
     guide_area() +
     plot_layout(heights = c(6, 1)) +
-    plot_annotation(tag_levels = 'A', tag_suffix = ')') +
+    plot_annotation(tag_levels = 'A', tag_suffix = '') +
     plot_layout(guides = 'collect') +
     inset_element(
       p.stars.grob,
@@ -589,7 +581,7 @@ p.stars.grob <- grid::textGrob(
   save.plot(
     'fig3',
     root.dir = PLOTS_DIR,
-    sub.dir = 'composed',
+    sub.dir = 'main',
     w = 6.5,
     h = 4.5
   )

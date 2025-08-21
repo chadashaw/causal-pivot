@@ -1,3 +1,15 @@
+---
+title: "Ancestry Confounder Control"
+date: "`r format(Sys.time(), '%d %B, %Y, %H:%M')`"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+---
+
 ```{r ancestry_control_deps}
 library(Rtsne, quietly = T, warn.conflicts = F)
 library(patchwork, quietly = T, warn.conflicts = F)
@@ -85,7 +97,7 @@ A tSNE projection of the PCA space is used to visualize the procedure.
 Note: in tSNE space, observations may appear more distant than they really are
 and are shown purely as an intuitive aid.
 
-```{r knn, cache=T}
+```{r knn, warning=F, message=F}
 # helper function to find nearest neighbors ####
 pos.neg.knn <- function(a.distances, k, rv) {
   pos.idx <- which(rv)
@@ -255,7 +267,7 @@ process.knn.results <- function(knn.results) {
 
 # set parameters ####
 
-n = 1000 # the number of permutations when creating permutation distributions
+n = 32 # the number of permutations when creating permutation distributions
 k = 2 # number of RV- neighborsto use when calculating PRS delta
 r = 0.637 # the "decay" factor to simulate decreasing eigenvalues of PCs
 
@@ -323,18 +335,6 @@ knn.results <- a.cohort.dfs %>%
       tsne = tsne,
       perm.res = perm.res
     )
-  })
-
-a.cohort.dfs %>%
-  purrr::map(~{
-    .x <- filter(.x, case)
-    .x$age <- scale(.x$age)
-    .x$prs.res <- lm(prs ~ age, data = .x)$residuals
-    
-    .x %>%
-      ggplot(aes(x = prs, y = prs.res)) +
-      geom_point() +
-      geom_smooth(method = 'lm')
   })
 
 # iterate over cohorts and perform analysis #####
@@ -478,7 +478,7 @@ knn.plots.w.age <- process.knn.results(knn.results.w.age)
       legend.key.size = unit(0.9, 'cm'),
     )
   } %>%
-  save.plot('fig4', root.dir = PLOTS_DIR, sub.dir = 'composed', w = 6.5, h = 5)
+  save.plot('fig4', root.dir = PLOTS_DIR, sub.dir = 'main', w = 6.5, h = 5)
 
 {
   base.fig4.theme <- theme_bw(base_family = "Arial") +
@@ -554,7 +554,7 @@ knn.plots.w.age <- process.knn.results(knn.results.w.age)
       legend.key.size = unit(0.9, 'cm'),
     )
   } %>%
-  save.plot('fig4.w.age', root.dir = PLOTS_DIR, sub.dir = 'composed', w = 6.5, h = 5)
+  save.plot('fig4.w.age', root.dir = PLOTS_DIR, sub.dir = 'misc', w = 6.5, h = 5)
 ```
 
 ## Ancestry Propensity Control Methods
@@ -995,9 +995,9 @@ A lateral method for ancestry balancing is performed using inverse probability w
 A permutation z-statistic is calculated under G; the statistic is the difference
 in weighted PRS sums between RV+ and RV- cases.
 
-```{r inverse_probability_weighting, cache=T}
+```{r inverse_probability_weighting, warning=F, message=F}
 # set parameters ####
-n.perms <- 1000 # number of permutations for permutation testing
+n.perms <- 32 # number of permutations for permutation testing
 
 # ancestry - inverse probability weighting results
 a.cv.rfm.ipw <- purrr::map(cv.rfm.prop, function(x) {
